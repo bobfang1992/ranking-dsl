@@ -647,14 +647,14 @@ ranking-dsl/
 
 ### Phase 2: Plan.js Tooling
 
-**2.1 Static Gate (Linter)**
-- [ ] Implement AST parser using `@babel/parser`
-- [ ] Implement allowed statement subset checker
-- [ ] Implement disallowed construct detection (IO, eval, loops, etc.)
-- [ ] Special case: allow arrow functions only in `dsl.expr()`
-- [ ] Implement complexity limits (nesting, branches, file size)
-- [ ] Error reporting with file/line/col
-- [ ] Write comprehensive tests
+**2.1 Static Gate (Linter)** ✅ COMPLETED
+- [x] Implement AST parser using `@babel/parser`
+- [x] Implement allowed statement subset checker
+- [x] Implement disallowed construct detection (IO, eval, loops, new Function, etc.)
+- [x] Special case: allow arrow functions only in `dsl.expr()`
+- [x] Implement complexity limits (nesting, branches, file size, statements)
+- [x] Error reporting with file/line/col
+- [x] Write comprehensive tests (42 tests)
 
 **2.2 AST Rewriter (spanId injection)**
 - [ ] Parse plan.js with `@babel/parser` (ranges + loc)
