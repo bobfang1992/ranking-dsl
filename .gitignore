@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build outputs - TypeScript
+tools/*/dist/
+*.tsbuildinfo
+vitest.config.js
+vitest.config.js.map
+vitest.config.d.ts
+vitest.config.d.ts.map
+
+# Build outputs - C++
+build/
+engine/build/
+cmake-build-*/
+compile_commands.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Generated files (keep in repo for convenience, but can regenerate)
+# keys/generated/
+
+# OS
+Thumbs.db

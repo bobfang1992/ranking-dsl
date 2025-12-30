@@ -1,0 +1,22 @@
+{
+  "name": "@ranking-dsl/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "rankdsl": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ranking-dsl/shared": "*",
+    "@ranking-dsl/codegen": "*",
+    "@ranking-dsl/lint": "*",
+    "@ranking-dsl/expr": "*",
+    "@ranking-dsl/plan-compiler": "*",
+    "commander": "^11.1.0"
+  }
+}

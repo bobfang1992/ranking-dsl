@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "keys": [
+    {
+      "id": 1001,
+      "name": "cand.candidate_id",
+      "type": "i64",
+      "scope": "candidate",
+      "owner": "ranking-infra",
+      "doc": "Unique candidate identifier"
+    },
+    {
+      "id": 2001,
+      "name": "feat.freshness",
+      "type": "f32",
+      "scope": "feature",
+      "owner": "feature-platform",
+      "doc": "Freshness score in [0,1]"
+    },
+    {
+      "id": 2002,
+      "name": "feat.embedding",
+      "type": "f32vec",
+      "scope": "feature",
+      "owner": "feature-platform",
+      "doc": "Candidate embedding vector"
+    },
+    {
+      "id": 2003,
+      "name": "feat.query_embedding",
+      "type": "f32vec",
+      "scope": "feature",
+      "owner": "feature-platform",
+      "doc": "Query embedding vector"
+    },
+    {
+      "id": 3001,
+      "name": "score.base",
+      "type": "f32",
+      "scope": "score",
+      "owner": "sourcer-team",
+      "doc": "Base retrieval score from sourcer"
+    },
+    {
+      "id": 3002,
+      "name": "score.ml",
+      "type": "f32",
+      "scope": "score",
+      "owner": "model-platform",
+      "doc": "ML model prediction score"
+    },
+    {
+      "id": 3003,
+      "name": "score.adjusted",
+      "type": "f32",
+      "scope": "score",
+      "owner": "ranking-team",
+      "doc": "Score after adjustments (e.g., from njs nodes)"
+    },
+    {
+      "id": 3999,
+      "name": "score.final",
+      "type": "f32",
+      "scope": "score",
+      "owner": "ranking-team",
+      "doc": "Final ranking score used for ordering"
+    },
+    {
+      "id": 4001,
+      "name": "penalty.constraints",
+      "type": "f32",
+      "scope": "penalty",
+      "owner": "policy-team",
+      "doc": "Penalty for constraint violations"
+    },
+    {
+      "id": 4002,
+      "name": "penalty.diversity",
+      "type": "f32",
+      "scope": "penalty",
+      "owner": "ranking-team",
+      "doc": "Penalty for diversity enforcement"
+    },
+    {
+      "id": 9001,
+      "name": "debug.node_timings",
+      "type": "string",
+      "scope": "debug",
+      "owner": "ranking-infra",
+      "doc": "JSON string of per-node timing information"
+    }
+  ]
+}

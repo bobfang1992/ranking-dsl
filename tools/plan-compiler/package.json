@@ -1,0 +1,25 @@
+{
+  "name": "@ranking-dsl/plan-compiler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ranking-dsl/shared": "*",
+    "@ranking-dsl/lint": "*",
+    "@ranking-dsl/expr": "*",
+    "@ranking-dsl/codegen": "*"
+  }
+}
