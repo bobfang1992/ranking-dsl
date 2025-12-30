@@ -192,24 +192,26 @@ Plan files (`*.plan.js`) are validated by a static gate that enforces a restrict
 
 ```javascript
 // plan.js - configuration-driven pipeline
+// NOTE: Phase 2 not yet implemented - this shows the intended API
 const alpha = config.useNewModel ? 0.8 : 0.7;
 
-let p = dsl.sourcer("main", { limit: 1000 });
+// Use namespaced API (generated from NodeSpec catalog)
+let p = dsl.core.sourcer("main", { limit: 1000 });
 
 if (config.enableFeatures) {
-  p = p.features("base", { keys: [Keys.FEAT_FRESHNESS, Keys.FEAT_EMBEDDING] });
+  p = p.core.features("base", { keys: [Keys.FEAT_FRESHNESS, Keys.FEAT_EMBEDDING] });
 }
 
-p = p.model("ranking_v2", { threshold: 0.5 });
+p = p.core.model("ranking_v2", { threshold: 0.5 });
 
-// Build expression using dsl.F builder API (Phase 2 expr sugar not yet implemented)
+// Build expression using dsl.F builder API
 const F = dsl.F;
 const blendExpr = F.add(
   F.mul(F.const(alpha), F.signal(Keys.SCORE_BASE)),
   F.mul(F.const(1 - alpha), F.signal(Keys.SCORE_ML))
 );
 
-p = p.score(blendExpr, {
+p = p.core.score(blendExpr, {
   output_key_id: Keys.SCORE_FINAL
 });
 

@@ -58,16 +58,16 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
    // Build the pipeline using dsl.F builder API
    const F = dsl.F;
 
-   // Start with a sourcer
-   let p = dsl.sourcer("main_source", { limit: config.sourceLimit });
+   // Start with a sourcer (using namespaced API)
+   let p = dsl.core.sourcer("main_source", { limit: config.sourceLimit });
 
    // Add features
-   p = p.features("fetch_features", {
+   p = p.core.features("fetch_features", {
      keys: [Keys.FEAT_FRESHNESS, Keys.FEAT_EMBEDDING]
    });
 
    // Run ML model
-   p = p.model("ranking_model_v2", {
+   p = p.core.model("ranking_model_v2", {
      threshold: config.mlThreshold
    });
 
@@ -77,7 +77,7 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
      F.mul(F.const(1 - config.blendingAlpha), F.signal(Keys.SCORE_ML))
    );
 
-   p = p.score(blendExpr, {
+   p = p.core.score(blendExpr, {
      output_key_id: Keys.SCORE_FINAL
    });
 
@@ -245,8 +245,8 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
 1. **Enable detailed tracing:**
    ```javascript
    // In your plan.js, add trace_key to problematic nodes
-   p = p.model("ranking_v2", { threshold: 0.5 }, { trace_key: "main_model" })
-        .score(expr, {}, { trace_key: "final_score" });
+   p = p.core.model("ranking_v2", { threshold: 0.5 }, { trace_key: "main_model" })
+        .core.score(expr, {}, { trace_key: "final_score" });
    ```
 
 2. **Add logging configuration:**
@@ -826,10 +826,10 @@ Infra engineers maintain the Ranking DSL infrastructure, including the key regis
 1. **Use trace_key for all production nodes:**
    ```javascript
    // Good: enables debugging
-   p = p.model("v2", {}, { trace_key: "main_ranker" })
+   p = p.core.model("v2", {}, { trace_key: "main_ranker" })
 
    // Avoid: hard to identify in logs
-   p = p.model("v2", {})
+   p = p.core.model("v2", {})
    ```
 
 2. **Keep plans simple and readable:**
@@ -893,7 +893,7 @@ const clamped = F.clamp(withPenalty, F.const(0), F.const(1));
 
 ```javascript
 // Once filter node is available
-p = p.filter({
+p = p.core.filter({
   condition: F.gt(F.signal(Keys.FEAT_FRESHNESS), F.const(0.5))
 });
 ```
@@ -902,16 +902,16 @@ p = p.filter({
 
 ```javascript
 // Stage 1: Fast retrieval
-let p = dsl.sourcer("fast_index", { limit: 10000 })
-         .features("lightweight_feats", { keys: [Keys.FEAT_FRESHNESS] })
-         .model("fast_ranker", {})
-         .topK({ k: 1000, score_key: Keys.SCORE_ML });
+let p = dsl.core.sourcer("fast_index", { limit: 10000 })
+         .core.features("lightweight_feats", { keys: [Keys.FEAT_FRESHNESS] })
+         .core.model("fast_ranker", {})
+         .core.topK({ k: 1000, score_key: Keys.SCORE_ML });
 
 // Stage 2: Expensive re-ranking
-p = p.features("full_feats", { keys: [Keys.FEAT_EMBEDDING] })
-     .model("heavy_ranker", {})
-     .score(blendExpr, { output_key_id: Keys.SCORE_FINAL })
-     .topK({ k: 100, score_key: Keys.SCORE_FINAL });
+p = p.core.features("full_feats", { keys: [Keys.FEAT_EMBEDDING] })
+     .core.model("heavy_ranker", {})
+     .core.score(blendExpr, { output_key_id: Keys.SCORE_FINAL })
+     .core.topK({ k: 100, score_key: Keys.SCORE_FINAL });
 
 return p.build();
 ```
