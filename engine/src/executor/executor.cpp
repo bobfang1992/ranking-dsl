@@ -60,7 +60,7 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
     // Run node with tracing
     auto start = std::chrono::high_resolution_clock::now();
 
-    Tracer::LogNodeStart(plan.plan.name, node_id, spec->op);
+    Tracer::LogNodeStart(plan.plan.name, node_id, spec->op, spec->trace_key);
 
     CandidateBatch output = runner->Run(ctx, input, spec->params);
 
@@ -68,7 +68,8 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
     auto duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
     Tracer::LogNodeEnd(plan.plan.name, node_id, spec->op,
-                       duration_ms, input.RowCount(), output.RowCount());
+                       duration_ms, input.RowCount(), output.RowCount(),
+                       "", spec->trace_key);
 
     outputs[node_id] = std::move(output);
   }

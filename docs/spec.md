@@ -1,4 +1,4 @@
-# Embedded Ranking DSL + JS Nodes Spec (v0.2.5) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
+# Embedded Ranking DSL + JS Nodes Spec (v0.2.6) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
 
 This spec defines an embedded DSL for ranking pipelines where:
 
@@ -240,13 +240,33 @@ Plan.js MUST remain orchestration-level. The engine compiler enforces plan compl
 
 All pipeline methods return a new Pipeline:
 
-- `Pipeline.features(keys: Key[], params?: object) -> Pipeline`
-- `Pipeline.model(name: string, params?: object) -> Pipeline`
-- `Pipeline.node(op: string, params?: object) -> Pipeline`
+- `Pipeline.features(keys: Key[], params?: object, opts?: NodeOpts) -> Pipeline`
+- `Pipeline.model(name: string, params?: object, opts?: NodeOpts) -> Pipeline`
+- `Pipeline.node(op: string, params?: object, opts?: NodeOpts) -> Pipeline`
   - core nodes: `core:<name>`
   - js nodes: `js:<path>@<version>#<digest>` (recommended)
-- `Pipeline.score(expr: ExprIR | JSExprToken, params?: object) -> Pipeline`
+- `Pipeline.score(expr: ExprIR | JSExprToken, params?: object, opts?: NodeOpts) -> Pipeline`
 - `Pipeline.build(options?: object) -> Plan`
+
+#### NodeOpts (REQUIRED)
+
+`NodeOpts` attaches **human-readable tracing metadata** to a plan node (does not affect ranking semantics):
+
+- `trace_key?: string` — optional stable identifier for this node within a plan, used for tracing/logging diagnostics.
+
+Constraints (RECOMMENDED, compiler-enforced):
+
+- length 1..64
+- charset: `[A-Za-z0-9._/-]`
+- SHOULD be unique within a plan (duplicates MAY be rejected or warned)
+
+Example:
+
+```js
+p = p.model("vm_v1", { /* params */ }, { trace_key: "final_vm" })
+     .score(dsl.expr(() => 0.7 * Keys.A + 0.3 * Keys.B), {}, { trace_key: "final_score" });
+```
+
 
 #### Plan options
 
@@ -449,6 +469,33 @@ Emit JSON lines:
 
 - `node_start`, `node_end` with duration, rows_in/out, error_code
   Sample dump reads from columnar batch and prints selected dump_keys for topN rows.
+
+### 12.1 trace_key and span naming (REQUIRED)
+
+Each plan node MAY carry an optional `trace_key` (from `NodeOpts.trace_key`). The engine MUST:
+
+- include `trace_key` in `node_start`/`node_end` events (when present)
+- attach `trace_key` as a span attribute
+- incorporate `trace_key` into the span name for human debugging (recommended format: `op(trace_key)`) 
+
+Example span names:
+
+- `core:model(final_vm)`
+- `core:score_formula(final_score)`
+
+### 12.2 njs trace prefix for nested native calls (REQUIRED)
+
+For njs nodes, the engine MUST compute a `trace_prefix` (default: the `.njs` filename stem, e.g. `rank_vm.njs` → `rank_vm`).
+
+If an njs node triggers **nested native node execution** via a host-provided API (e.g. calling a core node runner from within njs), the engine MUST namespace those nested spans using the prefix:
+
+- if the nested call has its own `trace_key` `k`, use `trace_key = "{trace_prefix}::" + k`
+- otherwise, use `trace_key = "{trace_prefix}"`
+
+The engine SHOULD also attach `njs_file` and `trace_prefix` span attributes to help identify the originating module.
+
+Rationale: it must be obvious in traces/logs when a native operation was invoked from inside an njs module, and which module file it came from.
+
 
 ---
 
