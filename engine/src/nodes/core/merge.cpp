@@ -2,6 +2,7 @@
 #include "nodes/registry.h"
 #include "keys.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -29,45 +30,25 @@ class MergeNode : public NodeRunner {
       return ColumnBatch(0);
     }
 
-    // Get the candidate_id and score columns
-    auto id_col = input.GetColumn(keys::id::CAND_CANDIDATE_ID);
-    auto score_col = input.GetColumn(keys::id::SCORE_BASE);
+    // Get typed columns for faster access
+    auto* id_col = input.GetI64Column(keys::id::CAND_CANDIDATE_ID);
+    auto* score_col = input.GetF32Column(keys::id::SCORE_BASE);
 
     // Track best row index for each candidate_id
-    // Key: candidate_id, Value: row index
     std::unordered_map<int64_t, size_t> best_row;
 
     for (size_t i = 0; i < row_count; ++i) {
-      // Get candidate ID
-      int64_t id = 0;
-      if (id_col) {
-        const Value& val = id_col->Get(i);
-        if (auto* p = std::get_if<int64_t>(&val)) {
-          id = *p;
-        } else {
-          continue;  // Skip rows without valid ID
-        }
-      } else {
-        continue;
+      if (!id_col || id_col->IsNull(i)) {
+        continue;  // Skip rows without valid ID
       }
+      int64_t id = id_col->Get(i);
 
       auto it = best_row.find(id);
       if (it == best_row.end()) {
         best_row[id] = i;
       } else if (dedup == "max_base" && score_col) {
-        // Compare scores
-        float existing_score = 0.0f;
-        float new_score = 0.0f;
-
-        const Value& existing_val = score_col->Get(it->second);
-        if (auto* f = std::get_if<float>(&existing_val)) {
-          existing_score = *f;
-        }
-
-        const Value& new_val = score_col->Get(i);
-        if (auto* f = std::get_if<float>(&new_val)) {
-          new_score = *f;
-        }
+        float existing_score = score_col->IsNull(it->second) ? 0.0f : score_col->Get(it->second);
+        float new_score = score_col->IsNull(i) ? 0.0f : score_col->Get(i);
 
         if (new_score > existing_score) {
           best_row[id] = i;
@@ -83,7 +64,7 @@ class MergeNode : public NodeRunner {
       selected_rows.push_back(row_idx);
     }
 
-    // Sort for deterministic output (optional)
+    // Sort for deterministic output
     std::sort(selected_rows.begin(), selected_rows.end());
 
     // Create output batch with selected rows
@@ -95,12 +76,43 @@ class MergeNode : public NodeRunner {
       auto src_col = input.GetColumn(key_id);
       if (!src_col) continue;
 
-      auto dst_col = std::make_shared<Column>(out_row_count);
+      // Create new column of same type
+      auto dst_col = src_col->Clone();
+      // Note: Clone creates a copy of all data, but we only want selected rows.
+      // For now, create from scratch using GetValue/SetValue.
+
+      // Create output column based on type
+      TypedColumnPtr out_col;
+      switch (src_col->Type()) {
+        case ColumnType::F32:
+          out_col = std::make_shared<F32Column>(out_row_count);
+          break;
+        case ColumnType::I64:
+          out_col = std::make_shared<I64Column>(out_row_count);
+          break;
+        case ColumnType::Bool:
+          out_col = std::make_shared<BoolColumn>(out_row_count);
+          break;
+        case ColumnType::String:
+          out_col = std::make_shared<StringColumn>(out_row_count);
+          break;
+        case ColumnType::F32Vec: {
+          auto* vec_col = static_cast<F32VecColumn*>(src_col.get());
+          out_col = std::make_shared<F32VecColumn>(out_row_count, vec_col->Dim());
+          break;
+        }
+        case ColumnType::Bytes:
+          out_col = std::make_shared<BytesColumn>(out_row_count);
+          break;
+        default:
+          continue;
+      }
+
       for (size_t out_idx = 0; out_idx < out_row_count; ++out_idx) {
         size_t src_idx = selected_rows[out_idx];
-        dst_col->Set(out_idx, src_col->Get(src_idx));
+        out_col->SetValue(out_idx, src_col->GetValue(src_idx));
       }
-      output.SetColumn(key_id, dst_col);
+      output.SetColumn(key_id, out_col);
     }
 
     return output;

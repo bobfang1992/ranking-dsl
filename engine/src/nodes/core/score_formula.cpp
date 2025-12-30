@@ -3,6 +3,7 @@
 #include "keys.h"
 #include "expr/expr.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -40,8 +41,8 @@ class ScoreFormulaNode : public NodeRunner {
       return input;
     }
 
-    // Create output column
-    auto output_col = std::make_shared<Column>(row_count);
+    // Create typed F32 output column
+    auto output_col = std::make_shared<F32Column>(row_count);
 
     // Evaluate expression for each row using columnar API
     for (size_t i = 0; i < row_count; ++i) {
@@ -51,7 +52,7 @@ class ScoreFormulaNode : public NodeRunner {
 
     // Use BatchBuilder for COW semantics
     BatchBuilder builder(input);
-    builder.AddColumn(output_key, output_col);
+    builder.AddF32Column(output_key, output_col);
 
     return builder.Build();
   }

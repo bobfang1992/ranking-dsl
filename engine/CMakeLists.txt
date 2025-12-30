@@ -51,6 +51,7 @@ add_library(ranking_dsl_engine
   src/object/value.cpp
   src/object/obj.cpp
   src/object/column.cpp
+  src/object/typed_column.cpp
   src/object/column_batch.cpp
   src/object/batch_builder.cpp
   src/object/row_view.cpp
@@ -63,6 +64,8 @@ add_library(ranking_dsl_engine
   src/nodes/core/features.cpp
   src/nodes/core/model.cpp
   src/nodes/core/score_formula.cpp
+  src/nodes/js/batch_context.cpp
+  src/nodes/js/njs_runner.cpp
   src/executor/executor.cpp
   src/logging/trace.cpp
 )
@@ -98,6 +101,7 @@ if(RANKING_DSL_BUILD_TESTS)
     tests/column_batch_test.cpp
     tests/row_view_test.cpp
     tests/columnar_eval_test.cpp
+    tests/njs_runner_test.cpp
   )
 
   target_link_libraries(ranking_dsl_tests

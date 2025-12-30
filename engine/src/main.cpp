@@ -98,25 +98,19 @@ int main(int argc, char* argv[]) {
     size_t count = dump_top > 0 ? std::min(static_cast<size_t>(dump_top), row_count)
                                 : row_count;
 
-    // Get columns for faster access
-    auto id_col = result.GetColumn(keys::id::CAND_CANDIDATE_ID);
-    auto score_col = result.GetColumn(keys::id::SCORE_FINAL);
+    // Get typed columns for faster access
+    auto* id_col = result.GetI64Column(keys::id::CAND_CANDIDATE_ID);
+    auto* score_col = result.GetF32Column(keys::id::SCORE_FINAL);
 
     for (size_t i = 0; i < count; ++i) {
       int64_t id = 0;
       float score = 0.0f;
 
-      if (id_col) {
-        const Value& val = id_col->Get(i);
-        if (auto* ptr = std::get_if<int64_t>(&val)) {
-          id = *ptr;
-        }
+      if (id_col && !id_col->IsNull(i)) {
+        id = id_col->Get(i);
       }
-      if (score_col) {
-        const Value& val = score_col->Get(i);
-        if (auto* ptr = std::get_if<float>(&val)) {
-          score = *ptr;
-        }
+      if (score_col && !score_col->IsNull(i)) {
+        score = score_col->Get(i);
       }
 
       fmt::print("  [{}] candidate_id={}, score.final={:.4f}\n", i, id, score);

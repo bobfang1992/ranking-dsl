@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
-#include "object/column.h"
+#include "object/typed_column.h"
 #include "object/column_batch.h"
 #include "object/batch_builder.h"
 #include "keys/registry.h"
@@ -8,66 +9,80 @@
 
 using namespace ranking_dsl;
 
-TEST_CASE("Column operations", "[column]") {
-  SECTION("Create empty column") {
-    Column col;
+TEST_CASE("TypedColumn operations", "[column]") {
+  SECTION("Create empty F32Column") {
+    F32Column col;
     REQUIRE(col.Size() == 0);
   }
 
-  SECTION("Create column with size") {
-    Column col(10);
+  SECTION("Create F32Column with size") {
+    F32Column col(10);
     REQUIRE(col.Size() == 10);
     // All values should be null
     for (size_t i = 0; i < 10; ++i) {
-      REQUIRE(IsNull(col.Get(i)));
+      REQUIRE(col.IsNull(i));
     }
   }
 
-  SECTION("Set and get values") {
-    Column col(3);
+  SECTION("F32Column set and get values") {
+    F32Column col(3);
     col.Set(0, 1.5f);
     col.Set(1, 2.5f);
     col.Set(2, 3.5f);
 
-    auto* v0 = std::get_if<float>(&col.Get(0));
-    auto* v1 = std::get_if<float>(&col.Get(1));
-    auto* v2 = std::get_if<float>(&col.Get(2));
-
-    REQUIRE(v0 != nullptr);
-    REQUIRE(v1 != nullptr);
-    REQUIRE(v2 != nullptr);
-    REQUIRE(*v0 == 1.5f);
-    REQUIRE(*v1 == 2.5f);
-    REQUIRE(*v2 == 3.5f);
+    REQUIRE(col.Get(0) == 1.5f);
+    REQUIRE(col.Get(1) == 2.5f);
+    REQUIRE(col.Get(2) == 3.5f);
+    REQUIRE_FALSE(col.IsNull(0));
   }
 
-  SECTION("Auto-resize on set") {
-    Column col;
-    col.Set(5, 42.0f);
-    REQUIRE(col.Size() == 6);
-    REQUIRE(IsNull(col.Get(0)));
-    auto* v = std::get_if<float>(&col.Get(5));
-    REQUIRE(v != nullptr);
-    REQUIRE(*v == 42.0f);
+  SECTION("I64Column operations") {
+    I64Column col(3);
+    col.Set(0, int64_t{100});
+    col.Set(1, int64_t{200});
+    col.Set(2, int64_t{300});
+
+    REQUIRE(col.Get(0) == 100);
+    REQUIRE(col.Get(1) == 200);
+    REQUIRE(col.Get(2) == 300);
   }
 
-  SECTION("Clone column") {
-    Column col(3);
+  SECTION("F32VecColumn contiguous storage") {
+    F32VecColumn col(3, 4);  // 3 rows, 4 dimensions
+    REQUIRE(col.Size() == 3);
+    REQUIRE(col.Dim() == 4);
+    REQUIRE(col.DataSize() == 12);  // 3 * 4
+
+    col.Set(0, {1.0f, 2.0f, 3.0f, 4.0f});
+    col.Set(1, {5.0f, 6.0f, 7.0f, 8.0f});
+    col.Set(2, {9.0f, 10.0f, 11.0f, 12.0f});
+
+    // Check contiguous data layout
+    const float* data = col.Data();
+    REQUIRE(data[0] == 1.0f);  // row 0, dim 0
+    REQUIRE(data[4] == 5.0f);  // row 1, dim 0
+    REQUIRE(data[8] == 9.0f);  // row 2, dim 0
+
+    // Check GetRow returns correct pointer
+    REQUIRE(col.GetRow(1)[0] == 5.0f);
+    REQUIRE(col.GetRow(1)[3] == 8.0f);
+  }
+
+  SECTION("Clone typed column") {
+    F32Column col(3);
     col.Set(0, 1.0f);
     col.Set(1, 2.0f);
     col.Set(2, 3.0f);
 
-    Column clone = col.Clone();
-    REQUIRE(clone.Size() == col.Size());
+    auto clone = col.Clone();
+    auto* f32_clone = static_cast<F32Column*>(clone.get());
 
-    auto* orig = std::get_if<float>(&col.Get(1));
-    auto* cloned = std::get_if<float>(&clone.Get(1));
-    REQUIRE(*orig == *cloned);
+    REQUIRE(f32_clone->Size() == col.Size());
+    REQUIRE(f32_clone->Get(1) == 2.0f);
 
     // Modify original, clone should be unchanged
     col.Set(1, 100.0f);
-    cloned = std::get_if<float>(&clone.Get(1));
-    REQUIRE(*cloned == 2.0f);
+    REQUIRE(f32_clone->Get(1) == 2.0f);
   }
 }
 
@@ -87,7 +102,7 @@ TEST_CASE("ColumnBatch operations", "[column_batch]") {
   SECTION("Add and get columns") {
     ColumnBatch batch(3);
 
-    auto col1 = std::make_shared<Column>(3);
+    auto col1 = std::make_shared<F32Column>(3);
     col1->Set(0, 1.0f);
     col1->Set(1, 2.0f);
     col1->Set(2, 3.0f);
@@ -105,7 +120,7 @@ TEST_CASE("ColumnBatch operations", "[column_batch]") {
   SECTION("GetValue") {
     ColumnBatch batch(3);
 
-    auto col = std::make_shared<Column>(3);
+    auto col = std::make_shared<F32Column>(3);
     col->Set(0, 10.0f);
     col->Set(1, 20.0f);
     col->Set(2, 30.0f);
@@ -121,10 +136,26 @@ TEST_CASE("ColumnBatch operations", "[column_batch]") {
     REQUIRE(IsNull(missing));
   }
 
+  SECTION("Typed column accessors") {
+    ColumnBatch batch(3);
+
+    auto f32_col = std::make_shared<F32Column>(3);
+    f32_col->Set(0, 1.0f);
+    batch.SetColumn(keys::id::SCORE_BASE, f32_col);
+
+    auto i64_col = std::make_shared<I64Column>(3);
+    i64_col->Set(0, int64_t{100});
+    batch.SetColumn(keys::id::CAND_CANDIDATE_ID, i64_col);
+
+    REQUIRE(batch.GetF32Column(keys::id::SCORE_BASE) != nullptr);
+    REQUIRE(batch.GetI64Column(keys::id::CAND_CANDIDATE_ID) != nullptr);
+    REQUIRE(batch.GetF32Column(keys::id::CAND_CANDIDATE_ID) == nullptr);  // Wrong type
+  }
+
   SECTION("UseCount for column sharing") {
     ColumnBatch batch(3);
 
-    auto col = std::make_shared<Column>(3);
+    auto col = std::make_shared<F32Column>(3);
     REQUIRE(col.use_count() == 1);
 
     batch.SetColumn(keys::id::SCORE_BASE, col);
@@ -136,12 +167,12 @@ TEST_CASE("ColumnBatch operations", "[column_batch]") {
 
 TEST_CASE("BatchBuilder COW semantics", "[batch_builder]") {
   // Create a source batch with two columns
-  auto id_col = std::make_shared<Column>(3);
+  auto id_col = std::make_shared<I64Column>(3);
   id_col->Set(0, int64_t{1});
   id_col->Set(1, int64_t{2});
   id_col->Set(2, int64_t{3});
 
-  auto score_col = std::make_shared<Column>(3);
+  auto score_col = std::make_shared<F32Column>(3);
   score_col->Set(0, 0.5f);
   score_col->Set(1, 0.6f);
   score_col->Set(2, 0.7f);
@@ -154,11 +185,11 @@ TEST_CASE("BatchBuilder COW semantics", "[batch_builder]") {
     BatchBuilder builder(source);
 
     // Add a new column
-    auto new_col = std::make_shared<Column>(3);
+    auto new_col = std::make_shared<F32Column>(3);
     new_col->Set(0, 1.0f);
     new_col->Set(1, 2.0f);
     new_col->Set(2, 3.0f);
-    builder.AddColumn(keys::id::SCORE_FINAL, new_col);
+    builder.AddF32Column(keys::id::SCORE_FINAL, new_col);
 
     ColumnBatch result = builder.Build();
 
@@ -170,15 +201,11 @@ TEST_CASE("BatchBuilder COW semantics", "[batch_builder]") {
     REQUIRE(result.HasColumn(keys::id::SCORE_FINAL));
 
     // Verify use counts show sharing
-    // id_col: source + result = 2 (plus the local var makes 3)
     REQUIRE(id_col.use_count() == 3);
     REQUIRE(score_col.use_count() == 3);
   }
 
   SECTION("Modifying existing column triggers COW") {
-    // Record initial use count
-    long initial_score_count = score_col.use_count();
-
     BatchBuilder builder(source);
 
     // Modify a value in score column
@@ -193,21 +220,16 @@ TEST_CASE("BatchBuilder COW semantics", "[batch_builder]") {
     REQUIRE(result.GetColumn(keys::id::SCORE_BASE) != score_col);
 
     // Verify the original is unchanged
-    auto* orig_val = std::get_if<float>(&score_col->Get(1));
-    REQUIRE(orig_val != nullptr);
-    REQUIRE(*orig_val == 0.6f);
+    REQUIRE(score_col->Get(1) == 0.6f);
 
     // Verify the result has the new value
-    auto result_score_col = result.GetColumn(keys::id::SCORE_BASE);
-    auto* new_val = std::get_if<float>(&result_score_col->Get(1));
-    REQUIRE(new_val != nullptr);
-    REQUIRE(*new_val == 0.99f);
+    auto* result_score_col = result.GetF32Column(keys::id::SCORE_BASE);
+    REQUIRE(result_score_col != nullptr);
+    REQUIRE(result_score_col->Get(1) == 0.99f);
 
     // Other values in the COW'd column should be preserved
-    auto* val0 = std::get_if<float>(&result_score_col->Get(0));
-    auto* val2 = std::get_if<float>(&result_score_col->Get(2));
-    REQUIRE(*val0 == 0.5f);
-    REQUIRE(*val2 == 0.7f);
+    REQUIRE(result_score_col->Get(0) == 0.5f);
+    REQUIRE(result_score_col->Get(2) == 0.7f);
   }
 
   SECTION("Multiple modifications to same column share one COW copy") {
@@ -222,13 +244,10 @@ TEST_CASE("BatchBuilder COW semantics", "[batch_builder]") {
     // Score column should be modified once (COW'd once)
     REQUIRE(result.GetColumn(keys::id::SCORE_BASE) != score_col);
 
-    auto result_col = result.GetColumn(keys::id::SCORE_BASE);
-    auto* v0 = std::get_if<float>(&result_col->Get(0));
-    auto* v1 = std::get_if<float>(&result_col->Get(1));
-    auto* v2 = std::get_if<float>(&result_col->Get(2));
-    REQUIRE(*v0 == 0.1f);
-    REQUIRE(*v1 == 0.2f);
-    REQUIRE(*v2 == 0.3f);
+    auto* result_col = result.GetF32Column(keys::id::SCORE_BASE);
+    REQUIRE(result_col->Get(0) == 0.1f);
+    REQUIRE(result_col->Get(1) == 0.2f);
+    REQUIRE(result_col->Get(2) == 0.3f);
   }
 
   SECTION("Builder from empty creates new batch") {

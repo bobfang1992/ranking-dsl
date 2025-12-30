@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "object/column.h"
+#include "object/typed_column.h"
 #include "object/value.h"
 
 namespace ranking_dsl {
@@ -14,17 +14,19 @@ namespace ranking_dsl {
 /**
  * ColumnBatch - columnar storage for candidate objects.
  *
- * Stores data in Structure-of-Arrays (SoA) format:
- * - Each column is a vector of values, one per row
+ * Stores data in Structure-of-Arrays (SoA) format with typed columns:
+ * - Each column has contiguous typed storage (F32Column, I64Column, etc.)
  * - Columns are keyed by key_id from the registry
  * - Columns can be shared between batches (copy-on-write via shared_ptr)
  *
- * This layout is cache-efficient for operations that iterate over
- * a single key across all candidates (e.g., score_formula).
+ * This layout enables:
+ * - Cache-efficient iteration over columns
+ * - Zero-copy Float32Array views for JS integration
+ * - Efficient vectorized operations
  */
 class ColumnBatch {
  public:
-  using ColumnMap = std::unordered_map<int32_t, ColumnPtr>;
+  using ColumnMap = std::unordered_map<int32_t, TypedColumnPtr>;
 
   /**
    * Create an empty batch with 0 rows.
@@ -57,10 +59,20 @@ class ColumnBatch {
   bool HasColumn(int32_t key_id) const;
 
   /**
-   * Get a column by key_id.
+   * Get a column by key_id (generic typed column).
    * Returns nullptr if not present.
    */
-  ColumnPtr GetColumn(int32_t key_id) const;
+  TypedColumnPtr GetColumn(int32_t key_id) const;
+
+  /**
+   * Get typed column accessors (fast path, returns nullptr if wrong type).
+   */
+  F32Column* GetF32Column(int32_t key_id) const;
+  I64Column* GetI64Column(int32_t key_id) const;
+  BoolColumn* GetBoolColumn(int32_t key_id) const;
+  StringColumn* GetStringColumn(int32_t key_id) const;
+  F32VecColumn* GetF32VecColumn(int32_t key_id) const;
+  BytesColumn* GetBytesColumn(int32_t key_id) const;
 
   /**
    * Get a value at (row_index, key_id).
@@ -91,9 +103,8 @@ class ColumnBatch {
 
   /**
    * Add or replace a column.
-   * The column must have at least row_count_ values.
    */
-  void SetColumn(int32_t key_id, ColumnPtr column);
+  void SetColumn(int32_t key_id, TypedColumnPtr column);
 
   /**
    * Get the reference count for a column (for testing COW).

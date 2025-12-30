@@ -3,6 +3,7 @@
 #include "object/row_view.h"
 #include "object/column_batch.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 #include "keys/registry.h"
 #include "keys.h"
 
@@ -10,12 +11,12 @@ using namespace ranking_dsl;
 
 TEST_CASE("RowView read operations", "[row_view]") {
   // Create a batch with test data
-  auto id_col = std::make_shared<Column>(3);
+  auto id_col = std::make_shared<I64Column>(3);
   id_col->Set(0, int64_t{100});
   id_col->Set(1, int64_t{200});
   id_col->Set(2, int64_t{300});
 
-  auto score_col = std::make_shared<Column>(3);
+  auto score_col = std::make_shared<F32Column>(3);
   score_col->Set(0, 0.5f);
   score_col->Set(1, 0.6f);
   score_col->Set(2, 0.7f);
@@ -81,7 +82,7 @@ TEST_CASE("RowView read operations", "[row_view]") {
 }
 
 TEST_CASE("RowView write operations", "[row_view]") {
-  auto score_col = std::make_shared<Column>(3);
+  auto score_col = std::make_shared<F32Column>(3);
   score_col->Set(0, 0.5f);
   score_col->Set(1, 0.6f);
   score_col->Set(2, 0.7f);
@@ -109,11 +110,9 @@ TEST_CASE("RowView write operations", "[row_view]") {
     ColumnBatch result = builder.Build();
 
     // Check the result has the new value
-    auto final_col = result.GetColumn(keys::id::SCORE_FINAL);
+    auto* final_col = result.GetF32Column(keys::id::SCORE_FINAL);
     REQUIRE(final_col != nullptr);
-    auto* val = std::get_if<float>(&final_col->Get(1));
-    REQUIRE(val != nullptr);
-    REQUIRE(*val == 0.99f);
+    REQUIRE(final_col->Get(1) == 0.99f);
   }
 
   SECTION("Set with type enforcement") {

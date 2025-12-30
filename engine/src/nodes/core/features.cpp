@@ -2,6 +2,7 @@
 #include "nodes/registry.h"
 #include "keys.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -37,39 +38,38 @@ class FeaturesNode : public NodeRunner {
     BatchBuilder builder(input);
 
     // Get candidate_id column for feature computation
-    auto id_col = input.GetColumn(keys::id::CAND_CANDIDATE_ID);
+    auto* id_col = input.GetI64Column(keys::id::CAND_CANDIDATE_ID);
 
     for (int32_t key_id : feature_keys) {
       if (key_id == keys::id::FEAT_FRESHNESS) {
-        // Create freshness column
-        auto col = std::make_shared<Column>(row_count);
+        // Create freshness column (F32)
+        auto col = std::make_shared<F32Column>(row_count);
         for (size_t i = 0; i < row_count; ++i) {
           float freshness = 0.5f;
-          if (id_col) {
-            const Value& val = id_col->Get(i);
-            if (auto* id = std::get_if<int64_t>(&val)) {
-              freshness = static_cast<float>((*id % 100)) / 100.0f;
-            }
+          if (id_col && !id_col->IsNull(i)) {
+            int64_t id = id_col->Get(i);
+            freshness = static_cast<float>((id % 100)) / 100.0f;
           }
           col->Set(i, freshness);
         }
-        builder.AddColumn(key_id, col);
+        builder.AddF32Column(key_id, col);
       } else if (key_id == keys::id::FEAT_EMBEDDING ||
                  key_id == keys::id::FEAT_QUERY_EMBEDDING) {
-        // Create embedding column
-        auto col = std::make_shared<Column>(row_count);
-        std::vector<float> embedding(128, 0.1f);
+        // Create embedding column (F32Vec with contiguous N*D storage)
+        constexpr size_t dim = 128;
+        auto col = std::make_shared<F32VecColumn>(row_count, dim);
+        std::vector<float> embedding(dim, 0.1f);
         for (size_t i = 0; i < row_count; ++i) {
           col->Set(i, embedding);  // Same embedding for all (stub)
         }
-        builder.AddColumn(key_id, col);
+        builder.AddF32VecColumn(key_id, col);
       } else {
-        // Default: set to 0.0f
-        auto col = std::make_shared<Column>(row_count);
+        // Default: set to 0.0f (F32)
+        auto col = std::make_shared<F32Column>(row_count);
         for (size_t i = 0; i < row_count; ++i) {
           col->Set(i, 0.0f);
         }
-        builder.AddColumn(key_id, col);
+        builder.AddF32Column(key_id, col);
       }
     }
 

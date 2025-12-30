@@ -6,6 +6,7 @@
 #include "expr/expr.h"
 #include "object/column_batch.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 #include "keys/registry.h"
 #include "keys.h"
 #include "nodes/node_runner.h"
@@ -16,12 +17,12 @@ using json = nlohmann::json;
 
 TEST_CASE("Columnar expression evaluation", "[expr][columnar]") {
   // Create a batch with test data
-  auto score_base_col = std::make_shared<Column>(3);
+  auto score_base_col = std::make_shared<F32Column>(3);
   score_base_col->Set(0, 0.5f);
   score_base_col->Set(1, 0.6f);
   score_base_col->Set(2, 0.7f);
 
-  auto score_ml_col = std::make_shared<Column>(3);
+  auto score_ml_col = std::make_shared<F32Column>(3);
   score_ml_col->Set(0, 0.3f);
   score_ml_col->Set(1, 0.4f);
   score_ml_col->Set(2, 0.5f);
@@ -93,8 +94,8 @@ TEST_CASE("Columnar expression evaluation", "[expr][columnar]") {
 
 TEST_CASE("BatchBuilder column sharing patterns", "[columnar]") {
   // Create a source batch with two columns
-  auto id_col = std::make_shared<Column>(5);
-  auto score_col = std::make_shared<Column>(5);
+  auto id_col = std::make_shared<I64Column>(5);
+  auto score_col = std::make_shared<F32Column>(5);
 
   for (size_t i = 0; i < 5; ++i) {
     id_col->Set(i, static_cast<int64_t>(i + 1));
@@ -110,32 +111,25 @@ TEST_CASE("BatchBuilder column sharing patterns", "[columnar]") {
     BatchBuilder builder(source);
 
     // Create output column (like score_formula does)
-    auto output_col = std::make_shared<Column>(5);
+    auto output_col = std::make_shared<F32Column>(5);
     for (size_t i = 0; i < 5; ++i) {
       // Simulate expression: 2.0 * SCORE_BASE
-      float input_val = 0.0f;
-      auto score_ptr = source.GetColumn(keys::id::SCORE_BASE);
-      if (score_ptr) {
-        auto* f = std::get_if<float>(&score_ptr->Get(i));
-        if (f) input_val = *f;
-      }
+      float input_val = score_col->IsNull(i) ? 0.0f : score_col->Get(i);
       float result = 2.0f * input_val;
       output_col->Set(i, result);
     }
 
-    builder.AddColumn(keys::id::SCORE_FINAL, output_col);
+    builder.AddF32Column(keys::id::SCORE_FINAL, output_col);
     ColumnBatch result = builder.Build();
 
     // Verify output
     REQUIRE(result.RowCount() == 5);
     REQUIRE(result.HasColumn(keys::id::SCORE_FINAL));
 
-    auto result_col = result.GetColumn(keys::id::SCORE_FINAL);
+    auto* result_col = result.GetF32Column(keys::id::SCORE_FINAL);
     for (size_t i = 0; i < 5; ++i) {
       float expected = 2.0f * static_cast<float>(i + 1) * 0.1f;
-      auto* val = std::get_if<float>(&result_col->Get(i));
-      REQUIRE(val != nullptr);
-      REQUIRE(*val == Catch::Approx(expected));
+      REQUIRE(result_col->Get(i) == Catch::Approx(expected));
     }
 
     // Verify sharing - original columns should be shared
@@ -159,18 +153,14 @@ TEST_CASE("BatchBuilder column sharing patterns", "[columnar]") {
     REQUIRE(result.GetColumn(keys::id::SCORE_BASE) != score_col);
 
     // Verify original unchanged
-    auto* orig = std::get_if<float>(&score_col->Get(2));
-    REQUIRE(*orig == Catch::Approx(0.3f));
+    REQUIRE(score_col->Get(2) == Catch::Approx(0.3f));
 
     // Verify result has new value
-    auto result_score = result.GetColumn(keys::id::SCORE_BASE);
-    auto* modified = std::get_if<float>(&result_score->Get(2));
-    REQUIRE(*modified == 0.99f);
+    auto* result_score = result.GetF32Column(keys::id::SCORE_BASE);
+    REQUIRE(result_score->Get(2) == 0.99f);
 
     // Other values preserved
-    auto* v0 = std::get_if<float>(&result_score->Get(0));
-    auto* v1 = std::get_if<float>(&result_score->Get(1));
-    REQUIRE(*v0 == Catch::Approx(0.1f));
-    REQUIRE(*v1 == Catch::Approx(0.2f));
+    REQUIRE(result_score->Get(0) == Catch::Approx(0.1f));
+    REQUIRE(result_score->Get(1) == Catch::Approx(0.2f));
   }
 }

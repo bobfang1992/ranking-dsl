@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "object/column_batch.h"
+#include "object/typed_column.h"
 #include "object/value.h"
 
 namespace ranking_dsl {
@@ -49,10 +50,16 @@ class BatchBuilder {
            const KeyRegistry* registry = nullptr);
 
   /**
-   * Add a new column (no COW needed - this is a new key).
-   * The column must have at least row_count values.
+   * Add a complete typed column (no COW needed - replaces any existing).
    */
-  void AddColumn(int32_t key_id, ColumnPtr column);
+  void AddColumn(int32_t key_id, TypedColumnPtr column);
+
+  /**
+   * Add typed columns directly (fast path for columnar operations).
+   */
+  void AddF32Column(int32_t key_id, std::shared_ptr<F32Column> column);
+  void AddI64Column(int32_t key_id, std::shared_ptr<I64Column> column);
+  void AddF32VecColumn(int32_t key_id, std::shared_ptr<F32VecColumn> column);
 
   /**
    * Build the final batch.
@@ -76,14 +83,15 @@ class BatchBuilder {
   /**
    * Ensure we have a writable column for key_id.
    * Copies from source if needed (COW).
+   * Returns the column type to use for new columns.
    */
-  Column& EnsureWritable(int32_t key_id);
+  TypedColumnPtr EnsureWritable(int32_t key_id, ColumnType type_hint = ColumnType::Null);
 
   const ColumnBatch* source_ = nullptr;  // May be null for new batches
   size_t row_count_ = 0;
 
   // Columns that have been modified (owned by builder)
-  std::unordered_map<int32_t, Column> modified_columns_;
+  std::unordered_map<int32_t, TypedColumnPtr> modified_columns_;
 
   // Keys that have been modified (for tracking)
   std::unordered_set<int32_t> modified_keys_;

@@ -2,6 +2,7 @@
 #include "nodes/registry.h"
 #include "keys.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -26,29 +27,23 @@ class ModelNode : public NodeRunner {
       return input;
     }
 
-    // Get input columns
-    auto base_col = input.GetColumn(keys::id::SCORE_BASE);
-    auto fresh_col = input.GetColumn(keys::id::FEAT_FRESHNESS);
+    // Get input columns (typed access)
+    auto* base_col = input.GetF32Column(keys::id::SCORE_BASE);
+    auto* fresh_col = input.GetF32Column(keys::id::FEAT_FRESHNESS);
 
     // Create ML score column
-    auto ml_col = std::make_shared<Column>(row_count);
+    auto ml_col = std::make_shared<F32Column>(row_count);
 
     for (size_t i = 0; i < row_count; ++i) {
       float base_score = 0.0f;
       float freshness = 0.0f;
 
-      if (base_col) {
-        const Value& val = base_col->Get(i);
-        if (auto* f = std::get_if<float>(&val)) {
-          base_score = *f;
-        }
+      if (base_col && !base_col->IsNull(i)) {
+        base_score = base_col->Get(i);
       }
 
-      if (fresh_col) {
-        const Value& val = fresh_col->Get(i);
-        if (auto* f = std::get_if<float>(&val)) {
-          freshness = *f;
-        }
+      if (fresh_col && !fresh_col->IsNull(i)) {
+        freshness = fresh_col->Get(i);
       }
 
       // Simple weighted combination
@@ -58,7 +53,7 @@ class ModelNode : public NodeRunner {
 
     // Use BatchBuilder for COW semantics
     BatchBuilder builder(input);
-    builder.AddColumn(keys::id::SCORE_ML, ml_col);
+    builder.AddF32Column(keys::id::SCORE_ML, ml_col);
 
     return builder.Build();
   }

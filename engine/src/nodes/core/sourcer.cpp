@@ -2,6 +2,7 @@
 #include "nodes/registry.h"
 #include "keys.h"
 #include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -23,9 +24,9 @@ class SourcerNode : public NodeRunner {
                      const nlohmann::json& params) override {
     int k = params.value("k", 100);
 
-    // Create columns directly
-    auto id_column = std::make_shared<Column>(k);
-    auto score_column = std::make_shared<Column>(k);
+    // Create typed columns directly
+    auto id_column = std::make_shared<I64Column>(k);
+    auto score_column = std::make_shared<F32Column>(k);
 
     for (int i = 0; i < k; ++i) {
       // Set candidate ID
