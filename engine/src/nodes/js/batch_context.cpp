@@ -2,7 +2,20 @@
 
 #include <stdexcept>
 
+#include "keys/registry.h"
+
 namespace ranking_dsl {
+
+// Helper to format key identifier with name if available
+static std::string FormatKeyId(int32_t key_id, const KeyRegistry* registry) {
+  if (registry) {
+    auto* info = registry->GetById(key_id);
+    if (info) {
+      return std::to_string(key_id) + " (" + info->name + ")";
+    }
+  }
+  return std::to_string(key_id);
+}
 
 BatchContext::BatchContext(const ColumnBatch& batch,
                            BatchBuilder& builder,
@@ -77,7 +90,7 @@ std::vector<int64_t> BatchContext::GetI64(int32_t key_id) const {
 void BatchContext::CheckWriteAllowed(int32_t key_id, keys::KeyType expected_type) {
   // Check meta.writes
   if (allowed_writes_.find(key_id) == allowed_writes_.end()) {
-    throw std::runtime_error("Write to key " + std::to_string(key_id) +
+    throw std::runtime_error("Write to key " + FormatKeyId(key_id, registry_) +
                              " not allowed - not in meta.writes");
   }
 
@@ -88,9 +101,9 @@ void BatchContext::CheckWriteAllowed(int32_t key_id, keys::KeyType expected_type
       throw std::runtime_error("Unknown key: " + std::to_string(key_id));
     }
     if (key_info->type != expected_type) {
-      throw std::runtime_error("Type mismatch for key " + std::to_string(key_id) +
-                               ": expected " + std::to_string(static_cast<int>(expected_type)) +
-                               ", got " + std::to_string(static_cast<int>(key_info->type)));
+      throw std::runtime_error("Type mismatch for key " + FormatKeyId(key_id, registry_) +
+                               ": expected " + std::string(KeyTypeToString(expected_type)) +
+                               ", got " + std::string(KeyTypeToString(key_info->type)));
     }
   }
 }

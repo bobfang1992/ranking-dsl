@@ -1,5 +1,6 @@
 #include "nodes/js/njs_runner.h"
 
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -8,6 +9,7 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include "keys/registry.h"
 #include "nodes/registry.h"
 
 namespace ranking_dsl {
@@ -398,6 +400,40 @@ CandidateBatch NjsRunner::Run(const ExecContext& ctx,
   impl_->js_ctx.max_instructions = 1000000;  // 1M instructions default
   impl_->js_ctx.interrupted = false;
   JS_SetInterruptHandler(impl_->rt, JsInterruptHandler, &impl_->js_ctx);
+
+  // Inject Keys global from registry
+  JSValue global = JS_GetGlobalObject(js_ctx_handle);
+  JSValue keys_obj = JS_NewObject(js_ctx_handle);
+  JSValue key_info_obj = JS_NewObject(js_ctx_handle);
+
+  if (ctx.registry) {
+    for (const auto& key_entry : ctx.registry->AllKeys()) {
+      // Convert name to constant format: "score.base" -> "SCORE_BASE"
+      std::string const_name = key_entry.name;
+      for (char& c : const_name) {
+        if (c == '.') c = '_';
+        else c = std::toupper(c);
+      }
+
+      // Keys.SCORE_BASE = 3001
+      JS_SetPropertyStr(js_ctx_handle, keys_obj, const_name.c_str(),
+                        JS_NewInt32(js_ctx_handle, key_entry.id));
+
+      // KeyInfo.SCORE_BASE = { id: 3001, name: "score.base", type: "f32" }
+      JSValue info = JS_NewObject(js_ctx_handle);
+      JS_SetPropertyStr(js_ctx_handle, info, "id", JS_NewInt32(js_ctx_handle, key_entry.id));
+      JS_SetPropertyStr(js_ctx_handle, info, "name",
+                        JS_NewString(js_ctx_handle, key_entry.name.c_str()));
+      std::string type_str(KeyTypeToString(key_entry.type));
+      JS_SetPropertyStr(js_ctx_handle, info, "type",
+                        JS_NewString(js_ctx_handle, type_str.c_str()));
+      JS_SetPropertyStr(js_ctx_handle, key_info_obj, const_name.c_str(), info);
+    }
+  }
+
+  JS_SetPropertyStr(js_ctx_handle, global, "Keys", keys_obj);
+  JS_SetPropertyStr(js_ctx_handle, global, "KeyInfo", key_info_obj);
+  JS_FreeValue(js_ctx_handle, global);
 
   // Wrap module in function to get exports
   std::string wrapped = R"(

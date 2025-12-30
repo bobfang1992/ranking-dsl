@@ -8,12 +8,14 @@ import { parseRegistryFile, parseRegistryYaml, formatErrors } from './parser.js'
 import { generateTypescript } from './generators/typescript.js';
 import { generateCpp } from './generators/cpp.js';
 import { generateJson } from './generators/json.js';
+import { generateNjs } from './generators/njs.js';
 import type { Registry } from './schema.js';
 
 export { parseRegistryFile, parseRegistryYaml, formatErrors } from './parser.js';
 export { generateTypescript } from './generators/typescript.js';
 export { generateCpp } from './generators/cpp.js';
 export { generateJson, generateJsonObject } from './generators/json.js';
+export { generateNjs } from './generators/njs.js';
 export * from './schema.js';
 
 /**
@@ -70,6 +72,7 @@ export function runCodegen(options: CodegenOptions): CodegenResult {
     { filename: 'keys.ts', content: generateTypescript(registry) },
     { filename: 'keys.h', content: generateCpp(registry) },
     { filename: 'keys.json', content: generateJson(registry) },
+    { filename: 'keys.njs', content: generateNjs(registry) },
   ];
 
   for (const output of outputs) {

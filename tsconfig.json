@@ -19,6 +19,11 @@
     "resolveJsonModule": true,
     "composite": true
   },
+  "exclude": [
+    "build-rel",
+    "engine/build",
+    "node_modules"
+  ],
   "references": [
     { "path": "tools/shared" },
     { "path": "tools/codegen" },
