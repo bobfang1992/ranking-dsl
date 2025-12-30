@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the implementation plan for an embedded DSL for ranking pipelines, based on `docs/spec.md` (v0.2.4).
+This document outlines the implementation plan for an embedded DSL for ranking pipelines, based on `docs/spec.md` (v0.2.8).
 
 **Architecture Summary:**
 - **Plan files** (`*.plan.js`) build a Plan (pure JSON data) using a DSL
@@ -57,6 +57,10 @@ gh pr create --fill
 | njs JS runtime | **QuickJS** (simpler step limits, smaller footprint) |
 | Builder finalize method | **`build()`** everywhere (not `finish()`) |
 | C++ CLI argument parsing | **CLI11** (header-only, modern C++, clean API) |
+| NodeSpec source of truth | **C++ and .njs modules** - metadata defined at node implementation site, exported to catalog |
+| Namespaced generated APIs | **Generated from NodeSpec catalog** - No public `.node(op: string)`, use `p.core.merge.weightedUnion(...)` |
+| Stability model | **stable vs experimental** - experimental nodes must use `experimental.*` namespace prefix |
+| Node writes descriptor | **static or param_derived** - static has fixed key list, param_derived reads from params (e.g., `output_key_id`) |
 
 ---
 
@@ -443,6 +447,12 @@ ranking-dsl/
 │   │   │   │   └── json.ts
 │   │   │   └── schema.ts     # Registry schema validation
 │   │   └── tests/
+│   ├── nodes-codegen/        # Node catalog export & codegen (v0.2.8+)
+│   │   ├── src/
+│   │   │   ├── export.ts     # Export C++ + njs NodeSpecs to YAML
+│   │   │   ├── codegen.ts    # Generate TypeScript bindings from catalog
+│   │   │   └── index.ts
+│   │   └── tests/
 │   ├── lint/                 # plan.js static gate
 │   │   ├── src/
 │   │   │   ├── index.ts
@@ -482,8 +492,9 @@ ranking-dsl/
 │   ├── CMakeLists.txt
 │   ├── src/
 │   │   ├── main.cpp          # Entry point
+│   │   ├── export_nodes.cpp  # Standalone utility to export NodeSpecs as JSON (v0.2.8+)
 │   │   ├── plan/
-│   │   │   ├── plan.h        # Plan data structures
+│   │   │   ├── plan.h        # Plan data structures (PlanNode)
 │   │   │   ├── plan.cpp
 │   │   │   ├── compiler.h    # Plan compiler
 │   │   │   └── compiler.cpp
@@ -511,7 +522,7 @@ ranking-dsl/
 │   │   │       └── cos_sim.cpp
 │   │   ├── nodes/
 │   │   │   ├── node_runner.h # Base interface
-│   │   │   ├── registry.h    # Node registry
+│   │   │   ├── registry.h    # Node registry + NodeSpec metadata (v0.2.8+)
 │   │   │   ├── core/
 │   │   │   │   ├── sourcer.cpp
 │   │   │   │   ├── merge.cpp
@@ -770,10 +781,71 @@ ranking-dsl/
 
 ---
 
+### Phase 3.8: NodeSpec Infrastructure & Catalog Codegen (v0.2.8+) ✅ COMPLETED
+
+**Goal:** Implement C++/njs as SSOT for node metadata, generate namespaced TypeScript bindings.
+
+**3.8.1 C++ NodeSpec Metadata (engine/src/nodes/registry.h)**
+- [x] `NodeSpec` struct with op, namespace_path, stability, doc, params_schema_json, reads, WritesDescriptor
+- [x] `Stability` enum (kStable, kExperimental)
+- [x] `WritesDescriptor` with Kind (kStatic or kParamDerived)
+- [x] `NodeRegistry::Register()` accepts NodeSpec
+- [x] `NodeRegistry::GetAllSpecs()` returns sorted NodeSpecs
+- [x] REGISTER_NODE_RUNNER macro requires 3 args (op, factory, spec)
+
+**3.8.2 Core Node NodeSpecs**
+- [x] `core:sourcer` - static writes [CAND_CANDIDATE_ID, SCORE_BASE]
+- [x] `core:merge` - static writes []
+- [x] `core:features` - param_derived writes from "keys" param
+- [x] `core:model` - static writes [SCORE_ML]
+- [x] `core:score_formula` - param_derived writes from "output_key_id" param
+- [x] All nodes include JSON Schema for params
+
+**3.8.3 Export Utility (engine/src/export_nodes.cpp)**
+- [x] Standalone executable `rankdsl_export_nodes`
+- [x] Calls `NodeRegistry::GetAllSpecs()`, emits JSON to stdout
+- [x] Includes key names from KeyRegistry (e.g., "score.base" for id 3001)
+- [x] Handles WritesDescriptor (static vs param_derived)
+- [x] Built by CMakeLists.txt
+
+**3.8.4 TypeScript nodes-codegen Package**
+- [x] `export.ts` - exports C++ + njs NodeSpecs to YAML catalog
+  - [x] Calls `rankdsl_export_nodes` binary for C++ nodes
+  - [x] Scans `njs/**/*.njs` files, extracts `exports.meta`
+  - [x] Computes pinned njs identity: `js:path@version#digest`
+  - [x] Validates stability/namespace consistency
+  - [x] Outputs to `nodes/generated/nodes.yaml`
+  - [x] POSIX path normalization for cross-platform consistency
+  - [x] Relaxed regex for exports.meta parsing
+- [x] `codegen.ts` - generates TypeScript bindings from catalog
+  - [x] Builds nested namespace tree from namespace_path
+  - [x] Generates strongly-typed methods (e.g., `p.core.merge.weightedUnion(...)`)
+  - [x] JSON Schema → TypeScript type conversion
+  - [x] Outputs to `nodes/generated/nodes.ts`
+
+**3.8.5 CLI Commands (rankdsl nodes)**
+- [x] `rankdsl nodes export` - exports catalog to YAML
+- [x] `rankdsl nodes codegen` - generates TypeScript bindings
+- [x] `rankdsl nodes graduate <node>` - placeholder for graduation workflow
+
+**3.8.6 Bot Review Fixes**
+- [x] POSIX path normalization in njs export (cross-platform)
+- [x] Relaxed exports.meta regex (single-line, no trailing newline)
+- [x] score_formula uses param-derived writes (matches runtime behavior)
+
+**Tests (43 C++ tests passing)**
+- All existing tests pass with NodeSpec infrastructure
+- Export utility validated manually with `rankdsl_export_nodes`
+
+---
+
 ### Phase 4: CLI & Integration
 
 **4.1 CLI**
 - [x] Implement `rankdsl codegen` (regenerate keys.ts, keys.h, keys.json, keys.njs from registry.yaml)
+- [x] Implement `rankdsl nodes export` (export NodeSpecs to YAML catalog)
+- [x] Implement `rankdsl nodes codegen` (generate TypeScript bindings from catalog)
+- [x] Implement `rankdsl nodes graduate` (placeholder for graduation workflow)
 - [ ] Implement `rankdsl validate <plan.js>` (static gate only)
 - [ ] Implement `rankdsl plan --in <file> --out <file> --config <file>`
 - [x] C++ engine CLI with CLI11 (plan.json, --keys, --dump-top, --quiet)

@@ -21,6 +21,7 @@ An embedded DSL for building ranking pipelines, with TypeScript tooling and a C+
 | Phase 3.5 | Complete | njs sandbox with policy-gated host IO (`ctx.io.readCsv`) |
 | Phase 3.6 | Complete | Plan complexity governance (two-layer TS/C++ enforcement) |
 | Phase 3.7 | Complete | Node-level trace_key and njs trace prefixing |
+| Phase 3.8 | Complete | NodeSpec infrastructure & catalog codegen (spec v0.2.8) |
 
 **Note:** The JS expression sugar syntax (`dsl.expr(() => ...)`) and AST rewriting with spanId injection are Phase 2 features and are **not yet implemented**. Use the builder-based `dsl.F.*` API for expressions.
 
@@ -58,9 +59,14 @@ ranking-dsl/
 │       ├── keys.h             # C++
 │       ├── keys.json          # Runtime (for engine)
 │       └── keys.njs           # CommonJS (for njs modules)
+├── nodes/
+│   └── generated/             # Generated node catalog & bindings (v0.2.8+)
+│       ├── nodes.yaml         # Node catalog exported from C++/njs
+│       └── nodes.ts           # TypeScript bindings (namespaced APIs)
 ├── tools/
 │   ├── shared/                # Common types, Expr IR, complexity
 │   ├── codegen/               # Registry → generated files
+│   ├── nodes-codegen/         # Node catalog export & codegen (v0.2.8+)
 │   ├── lint/                  # plan.js static gate (Phase 2)
 │   ├── expr/                  # JS expr → Expr IR (Phase 2)
 │   ├── plan-compiler/         # plan.js compiler (Phase 2)
@@ -91,6 +97,17 @@ npm run codegen
 
 # Check if generated files are up to date (for CI)
 node tools/cli/dist/index.js codegen --check
+
+# Export node catalog from C++ engine and njs modules (v0.2.8+)
+node tools/cli/dist/index.js nodes export
+node tools/cli/dist/index.js nodes export --engine-build engine/build --njs njs -o nodes/generated/nodes.yaml
+
+# Generate TypeScript bindings from node catalog (v0.2.8+)
+node tools/cli/dist/index.js nodes codegen
+node tools/cli/dist/index.js nodes codegen -i nodes/generated/nodes.yaml -o nodes/generated/nodes.ts
+
+# Graduate an experimental node to stable (v0.2.8+)
+node tools/cli/dist/index.js nodes graduate <node> --to <namespace>
 
 # Validate a plan against complexity budgets
 node tools/cli/dist/index.js validate plan.json
@@ -335,6 +352,83 @@ Host IO requires `meta.capabilities: ["io"]` and paths must be in policy allowli
 - `meta.writes` - Only listed keys can be written
 - `meta.capabilities` - Must declare `["io"]` to use `ctx.io.*`
 - `meta.budget` - `max_write_cells`, `max_write_bytes`, `max_io_bytes_read` limits enforced
+
+## Node Catalog & Generated Bindings (v0.2.8+)
+
+The ranking DSL uses C++ and .njs modules as the **single source of truth** for node metadata. Node metadata includes:
+
+- **op** - Unique operation identifier (e.g., `core:sourcer`, `js:example.njs@1.0.0#abc123`)
+- **namespace_path** - Namespace for generated API (e.g., `core.sourcer`, `experimental.myNode`)
+- **stability** - `stable` or `experimental`
+- **doc** - Human-readable description
+- **params_schema** - JSON Schema for parameter validation
+- **reads** - List of keys the node reads from
+- **writes** - Either `static` (fixed key list) or `param_derived` (determined by params)
+
+### NodeSpec in C++
+
+Core nodes define their metadata using the `NodeSpec` struct:
+
+```cpp
+static NodeSpec CreateScoreFormulaNodeSpec() {
+  NodeSpec spec;
+  spec.op = "core:score_formula";
+  spec.namespace_path = "core.score";
+  spec.stability = Stability::kStable;
+  spec.doc = "Evaluates an expression and writes the result";
+  spec.params_schema_json = R"({"type": "object", ...})";
+  spec.reads = {};
+  spec.writes.kind = WritesDescriptor::Kind::kParamDerived;
+  spec.writes.param_name = "output_key_id";
+  return spec;
+}
+
+REGISTER_NODE_RUNNER("core:score_formula", ScoreFormulaNode, CreateScoreFormulaNodeSpec());
+```
+
+### NodeSpec in njs
+
+njs modules define metadata in `exports.meta`:
+
+```javascript
+exports.meta = {
+  name: "example",
+  version: "1.0.0",
+  namespace_path: "experimental.example",
+  stability: "experimental",
+  doc: "Example custom node",
+  params_schema: { type: "object", properties: {...} },
+  reads: [Keys.SCORE_BASE],
+  writes: [Keys.SCORE_ML]
+};
+```
+
+### Catalog Export & Codegen Workflow
+
+```bash
+# 1. Export node catalog from C++/njs sources
+npm run build
+node tools/cli/dist/index.js nodes export
+
+# 2. Generate TypeScript bindings from catalog
+node tools/cli/dist/index.js nodes codegen
+
+# 3. Use generated namespaced APIs in plan.js (Phase 2+)
+# let p = dsl.sourcer("main", { limit: 1000 });
+# p = p.core.merge.weightedUnion({ strategy: "max" });
+# p = p.core.score({ expr: ... });
+```
+
+**Generated bindings provide:**
+- Type-safe method signatures derived from JSON Schema
+- Nested namespace structure (e.g., `p.core.merge.weightedUnion()`)
+- IntelliSense/autocomplete in IDEs
+- Compile-time checks for node parameters
+
+**Stability enforcement:**
+- `experimental.*` nodes can only be used in `dev`/`test` plan environments
+- `stable` nodes (any namespace except `experimental.*`) can be used in all environments
+- Graduation workflow: Update `namespace_path` in source, re-export, re-codegen
 
 ## Development
 
