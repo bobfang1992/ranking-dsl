@@ -90,9 +90,8 @@ static NodeSpec CreateScoreFormulaNodeSpec() {
   spec.reads = {};
 
   // Writes: param-derived from output_key_id parameter
-  // For now, use static with default (could be enhanced to be param-derived)
-  spec.writes.kind = WritesDescriptor::Kind::kStatic;
-  spec.writes.static_keys = {keys::id::SCORE_FINAL};  // Default output
+  spec.writes.kind = WritesDescriptor::Kind::kParamDerived;
+  spec.writes.param_name = "output_key_id";
 
   return spec;
 }

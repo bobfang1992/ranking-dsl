@@ -63,8 +63,8 @@ function extractNjsMeta(filePath: string): any {
   const content = fs.readFileSync(filePath, 'utf8');
 
   // Simple regex to extract exports.meta = { ... }
-  // This is fragile but works for well-formed modules
-  const metaMatch = content.match(/exports\.meta\s*=\s*(\{[\s\S]*?\n\})\s*;/);
+  // Relaxed to allow single-line or no trailing newline
+  const metaMatch = content.match(/exports\.meta\s*=\s*(\{[\s\S]*?\})\s*;/);
 
   if (!metaMatch) {
     throw new Error(`Could not extract exports.meta from ${filePath}`);
@@ -109,10 +109,12 @@ export function exportNjsNodes(njsDir: string): NodeSpec[] {
     try {
       const meta = extractNjsMeta(njsPath);
       const relativePath = path.relative(njsDir, njsPath);
+      // Normalize to POSIX separators for cross-platform consistency
+      const posixPath = relativePath.split(path.sep).join('/');
       const digest = computeDigest(njsPath);
 
       const spec: NodeSpec = {
-        op: `js:${relativePath}@${meta.version}#${digest.substring(0, 16)}`,
+        op: `js:${posixPath}@${meta.version}#${digest.substring(0, 16)}`,
         namespace_path: meta.namespace_path || `njs.${meta.name}`,
         stability: meta.stability || 'stable',
         doc: meta.doc || '',
@@ -125,7 +127,7 @@ export function exportNjsNodes(njsDir: string): NodeSpec[] {
         kind: 'njs',
         budgets: meta.budget,
         capabilities: meta.capabilities,
-        njs_path: relativePath,
+        njs_path: posixPath,
         version: meta.version,
         digest: digest.substring(0, 16),
       };
