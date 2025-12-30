@@ -1,6 +1,8 @@
 #include "nodes/node_runner.h"
 #include "nodes/registry.h"
 #include "keys.h"
+#include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -10,6 +12,7 @@ namespace ranking_dsl {
  * core:features - Populates feature keys.
  *
  * MVP: Stub implementation that adds placeholder features.
+ * Uses BatchBuilder with COW - original columns are shared.
  *
  * Params:
  *   - keys: int32[] (key IDs to populate)
@@ -26,39 +29,51 @@ class FeaturesNode : public NodeRunner {
       }
     }
 
-    CandidateBatch output;
-    output.reserve(input.size());
-
-    for (const auto& obj : input) {
-      Obj new_obj = obj;
-
-      // MVP: Add placeholder values for requested features
-      for (int32_t key_id : feature_keys) {
-        if (key_id == keys::id::FEAT_FRESHNESS) {
-          // Stub: random-ish freshness based on candidate ID
-          auto id_opt = obj.Get(keys::id::CAND_CANDIDATE_ID);
-          float freshness = 0.5f;
-          if (id_opt) {
-            if (auto* id = std::get_if<int64_t>(&*id_opt)) {
-              freshness = static_cast<float>((*id % 100)) / 100.0f;
-            }
-          }
-          new_obj = new_obj.Set(key_id, freshness);
-        } else if (key_id == keys::id::FEAT_EMBEDDING ||
-                   key_id == keys::id::FEAT_QUERY_EMBEDDING) {
-          // Stub: placeholder embedding
-          std::vector<float> embedding(128, 0.1f);
-          new_obj = new_obj.Set(key_id, std::move(embedding));
-        } else {
-          // Default: set to 0.0f
-          new_obj = new_obj.Set(key_id, 0.0f);
-        }
-      }
-
-      output.push_back(std::move(new_obj));
+    size_t row_count = input.RowCount();
+    if (row_count == 0 || feature_keys.empty()) {
+      return input;  // No changes needed
     }
 
-    return output;
+    // Use BatchBuilder for COW semantics
+    BatchBuilder builder(input);
+
+    // Get candidate_id column for feature computation
+    auto* id_col = input.GetI64Column(keys::id::CAND_CANDIDATE_ID);
+
+    for (int32_t key_id : feature_keys) {
+      if (key_id == keys::id::FEAT_FRESHNESS) {
+        // Create freshness column (F32)
+        auto col = std::make_shared<F32Column>(row_count);
+        for (size_t i = 0; i < row_count; ++i) {
+          float freshness = 0.5f;
+          if (id_col && !id_col->IsNull(i)) {
+            int64_t id = id_col->Get(i);
+            freshness = static_cast<float>((id % 100)) / 100.0f;
+          }
+          col->Set(i, freshness);
+        }
+        builder.AddF32Column(key_id, col);
+      } else if (key_id == keys::id::FEAT_EMBEDDING ||
+                 key_id == keys::id::FEAT_QUERY_EMBEDDING) {
+        // Create embedding column (F32Vec with contiguous N*D storage)
+        constexpr size_t dim = 128;
+        auto col = std::make_shared<F32VecColumn>(row_count, dim);
+        std::vector<float> embedding(dim, 0.1f);
+        for (size_t i = 0; i < row_count; ++i) {
+          col->Set(i, embedding);  // Same embedding for all (stub)
+        }
+        builder.AddF32VecColumn(key_id, col);
+      } else {
+        // Default: set to 0.0f (F32)
+        auto col = std::make_shared<F32Column>(row_count);
+        for (size_t i = 0; i < row_count; ++i) {
+          col->Set(i, 0.0f);
+        }
+        builder.AddF32Column(key_id, col);
+      }
+    }
+
+    return builder.Build();
   }
 
   std::string TypeName() const override { return "core:features"; }

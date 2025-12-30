@@ -1,6 +1,8 @@
 #include "nodes/node_runner.h"
 #include "nodes/registry.h"
 #include "keys.h"
+#include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -10,6 +12,7 @@ namespace ranking_dsl {
  * core:model - Runs a model and writes score.ml.
  *
  * MVP: Stub implementation that computes a simple score.
+ * Uses BatchBuilder with COW - original columns are shared.
  *
  * Params:
  *   - name: string (model name)
@@ -19,40 +22,40 @@ class ModelNode : public NodeRunner {
   CandidateBatch Run(const ExecContext& ctx,
                      const CandidateBatch& input,
                      const nlohmann::json& params) override {
-    std::string name = params.value("name", "default");
+    size_t row_count = input.RowCount();
+    if (row_count == 0) {
+      return input;
+    }
 
-    CandidateBatch output;
-    output.reserve(input.size());
+    // Get input columns (typed access)
+    auto* base_col = input.GetF32Column(keys::id::SCORE_BASE);
+    auto* fresh_col = input.GetF32Column(keys::id::FEAT_FRESHNESS);
 
-    for (const auto& obj : input) {
-      Obj new_obj = obj;
+    // Create ML score column
+    auto ml_col = std::make_shared<F32Column>(row_count);
 
-      // MVP: Compute a simple ML score based on base score and freshness
+    for (size_t i = 0; i < row_count; ++i) {
       float base_score = 0.0f;
       float freshness = 0.0f;
 
-      auto base_opt = obj.Get(keys::id::SCORE_BASE);
-      if (base_opt) {
-        if (auto* f = std::get_if<float>(&*base_opt)) {
-          base_score = *f;
-        }
+      if (base_col && !base_col->IsNull(i)) {
+        base_score = base_col->Get(i);
       }
 
-      auto fresh_opt = obj.Get(keys::id::FEAT_FRESHNESS);
-      if (fresh_opt) {
-        if (auto* f = std::get_if<float>(&*fresh_opt)) {
-          freshness = *f;
-        }
+      if (fresh_col && !fresh_col->IsNull(i)) {
+        freshness = fresh_col->Get(i);
       }
 
       // Simple weighted combination
       float ml_score = 0.6f * base_score + 0.4f * freshness;
-      new_obj = new_obj.Set(keys::id::SCORE_ML, ml_score);
-
-      output.push_back(std::move(new_obj));
+      ml_col->Set(i, ml_score);
     }
 
-    return output;
+    // Use BatchBuilder for COW semantics
+    BatchBuilder builder(input);
+    builder.AddF32Column(keys::id::SCORE_ML, ml_col);
+
+    return builder.Build();
   }
 
   std::string TypeName() const override { return "core:model"; }

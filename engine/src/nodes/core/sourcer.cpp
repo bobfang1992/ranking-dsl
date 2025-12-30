@@ -1,6 +1,8 @@
 #include "nodes/node_runner.h"
 #include "nodes/registry.h"
 #include "keys.h"
+#include "object/batch_builder.h"
+#include "object/typed_column.h"
 
 #include <nlohmann/json.hpp>
 
@@ -21,19 +23,22 @@ class SourcerNode : public NodeRunner {
                      const CandidateBatch& input,
                      const nlohmann::json& params) override {
     int k = params.value("k", 100);
-    std::string name = params.value("name", "default");
 
-    CandidateBatch output;
-    output.reserve(k);
+    // Create typed columns directly
+    auto id_column = std::make_shared<I64Column>(k);
+    auto score_column = std::make_shared<F32Column>(k);
 
     for (int i = 0; i < k; ++i) {
-      Obj obj;
       // Set candidate ID
-      obj = obj.Set(keys::id::CAND_CANDIDATE_ID, static_cast<int64_t>(i + 1));
+      id_column->Set(i, static_cast<int64_t>(i + 1));
       // Set base score (decreasing by rank for testing)
-      obj = obj.Set(keys::id::SCORE_BASE, 1.0f - (static_cast<float>(i) / k));
-      output.push_back(std::move(obj));
+      score_column->Set(i, 1.0f - (static_cast<float>(i) / k));
     }
+
+    // Build the batch with columns
+    ColumnBatch output(k);
+    output.SetColumn(keys::id::CAND_CANDIDATE_ID, id_column);
+    output.SetColumn(keys::id::SCORE_BASE, score_column);
 
     return output;
   }
