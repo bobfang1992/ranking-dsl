@@ -1,4 +1,4 @@
-# Embedded Ranking DSL + JS Nodes Spec (v0.2.6) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
+# Embedded Ranking DSL + JS Nodes Spec (v0.2.7) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
 
 This spec defines an embedded DSL for ranking pipelines where:
 
@@ -242,9 +242,17 @@ All pipeline methods return a new Pipeline:
 
 - `Pipeline.features(keys: Key[], params?: object, opts?: NodeOpts) -> Pipeline`
 - `Pipeline.model(name: string, params?: object, opts?: NodeOpts) -> Pipeline`
-- `Pipeline.node(op: string, params?: object, opts?: NodeOpts) -> Pipeline`
-  - core nodes: `core:<name>`
-  - js nodes: `js:<path>@<version>#<digest>` (recommended)
+- `Pipeline.core.<op>(params: <typed>, opts?: NodeOpts) -> Pipeline`
+  - A namespaced, code-generated method surface for **core** nodes.
+  - Example usage: `p.core.merge({ ... }, { trace_key: "merge" })`.
+- `Pipeline.njs.<op>(params: <typed>, opts?: NodeOpts) -> Pipeline`
+  - A namespaced, code-generated method surface for **repo-owned njs** nodes.
+  - Example usage: `p.njs.normalizeScore({ ... }, { trace_key: "norm" })`.
+
+Static typing requirement (REQUIRED):
+
+- The plan authoring surface MUST provide **static type checking** for node params (TypeScript typings).
+- Params MUST also be validated at runtime by the plan builder (fail fast).
 - `Pipeline.score(expr: ExprIR | JSExprToken, params?: object, opts?: NodeOpts) -> Pipeline`
 - `Pipeline.build(options?: object) -> Plan`
 
@@ -443,6 +451,41 @@ Restrictions (REQUIRED):
 - the engine MUST enforce IO budgets (bytes/rows/time) and fail closed.
 - if `ctx.io` is not enabled, it MUST be `undefined` and any attempt to use IO MUST fail.
 
+
+
+### 10.3 Node catalog & codegen for plan authoring (REQUIRED)
+
+To achieve a small, type-safe plan authoring surface at large team scale, the set of callable nodes MUST be defined in a repo-owned node catalog and code-generated into the plan DSL.
+
+**Node catalog** (recommended layout):
+
+- `nodes/registry.yaml` declares all nodes exposed to plan authors (core and approved njs nodes), including:
+  - stable `node_id` (non-reusable)
+  - `kind`: `core` or `njs`
+  - `name` (for generated method naming)
+  - `op` string used in Plan JSON (internal representation)
+  - param schema (JSON Schema or equivalent) for runtime validation + TS type generation
+  - ownership/docs/deprecation metadata
+
+**Generated plan API**:
+
+- `Pipeline.core.<name>(params, opts?) -> Pipeline` for `kind=core` entries
+- `Pipeline.njs.<name>(params, opts?) -> Pipeline` for `kind=njs` entries
+
+Notes:
+
+- The public plan API MUST NOT expose `Pipeline.node(op: string, ...)` to ranking engineers.
+- If an escape hatch is needed for infra/tests, it MUST be explicitly marked unsafe (e.g. `Pipeline._unsafe.node(...)`) and forbidden in production plans by policy.
+
+**njs entries must be pinned**:
+
+- For `kind=njs`, the catalog MUST pin the module identity (recommended: `path@version#digest`).
+- Upgrading an njs module MUST be done by adding a new catalog entry (or bumping version/digest) and deprecating the old one.
+
+**Static typing requirement**:
+
+- Codegen MUST emit TypeScript typings so that invalid params are caught at compile time in plan authoring (or JS with type-checking enabled).
+- The plan builder MUST also validate params at runtime against the schema (fail fast).
 
 ## 11. Engine: Compile & Execute
 
