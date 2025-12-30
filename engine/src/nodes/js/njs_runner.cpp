@@ -188,6 +188,12 @@ static bool ValidateCsvPath(const std::string& resource, std::string* error_out)
 // Helper: parse CSV file and return { columns: { col: [...] }, rowCount: N }
 static nlohmann::json ParseCsvFile(const std::string& path, NjsBudget& budget,
                                     std::string* error_out) {
+  // Enforce "0 = no IO allowed" semantics
+  if (budget.max_io_read_bytes == 0 || budget.max_io_read_rows == 0) {
+    if (error_out) *error_out = "IO budget not configured (max_io_read_bytes/rows = 0)";
+    return nullptr;
+  }
+
   std::ifstream file(path);
   if (!file.is_open()) {
     if (error_out) *error_out = "Failed to open CSV file: " + path;
@@ -225,13 +231,15 @@ static nlohmann::json ParseCsvFile(const std::string& path, NjsBudget& budget,
 
   // Read data rows
   while (std::getline(file, line)) {
-    // Check IO budget
+    // Check IO budget (cumulative across all readCsv calls)
     bytes_read += line.size() + 1;
-    if (budget.max_io_read_bytes > 0 && bytes_read > budget.max_io_read_bytes) {
+    int64_t total_bytes = budget.io_bytes_read + bytes_read;
+    int64_t total_rows = budget.io_rows_read + row_count + 1;
+    if (total_bytes > budget.max_io_read_bytes) {
       if (error_out) *error_out = "IO budget exceeded: max_io_read_bytes";
       return nullptr;
     }
-    if (budget.max_io_read_rows > 0 && row_count >= budget.max_io_read_rows) {
+    if (total_rows > budget.max_io_read_rows) {
       if (error_out) *error_out = "IO budget exceeded: max_io_read_rows";
       return nullptr;
     }

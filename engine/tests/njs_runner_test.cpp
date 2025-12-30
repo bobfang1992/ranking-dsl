@@ -766,3 +766,45 @@ TEST_CASE("Sandbox: path traversal rejection", "[njs][sandbox][acceptance]") {
         Catch::Matchers::ContainsSubstring("Absolute paths not allowed"));
   }
 }
+
+TEST_CASE("Sandbox: zero IO budget means no IO allowed", "[njs][sandbox][acceptance]") {
+  // Module requests IO capability but doesn't set IO budget (defaults to 0)
+  // "0 = no IO allowed" should be enforced
+
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  // Create policy that allows this module
+  NjsPolicy policy;
+  std::string policy_json = R"({
+    "csv_assets_dir": "engine/tests/testdata/csv",
+    "modules": [
+      {"name": "io_no_budget_test", "version": "1.0.0", "allow_io_csv_read": true}
+    ]
+  })";
+  policy.LoadFromJson(policy_json);
+
+  NjsRunner runner;
+  runner.SetPolicy(&policy);
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "io_no_budget_module.njs";
+  params["csv_file"] = "sample.csv";
+
+  // Module has IO capability and policy allows it, but budget is 0
+  // Should fail with "IO budget not configured"
+  REQUIRE_THROWS_WITH(
+      runner.Run(exec_ctx, batch, params),
+      Catch::Matchers::ContainsSubstring("IO budget not configured"));
+}
