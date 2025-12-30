@@ -1,9 +1,11 @@
 #include "nodes/node_runner.h"
 #include "nodes/registry.h"
 #include "keys.h"
+#include "object/batch_builder.h"
 
 #include <algorithm>
 #include <unordered_map>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -22,51 +24,83 @@ class MergeNode : public NodeRunner {
                      const nlohmann::json& params) override {
     std::string dedup = params.value("dedup", "first");
 
-    // Group by candidate_id
-    std::unordered_map<int64_t, Obj> best;
+    size_t row_count = input.RowCount();
+    if (row_count == 0) {
+      return ColumnBatch(0);
+    }
 
-    for (const auto& obj : input) {
-      auto id_opt = obj.Get(keys::id::CAND_CANDIDATE_ID);
-      if (!id_opt) continue;
+    // Get the candidate_id and score columns
+    auto id_col = input.GetColumn(keys::id::CAND_CANDIDATE_ID);
+    auto score_col = input.GetColumn(keys::id::SCORE_BASE);
 
-      auto* id_ptr = std::get_if<int64_t>(&*id_opt);
-      if (!id_ptr) continue;
+    // Track best row index for each candidate_id
+    // Key: candidate_id, Value: row index
+    std::unordered_map<int64_t, size_t> best_row;
 
-      int64_t id = *id_ptr;
+    for (size_t i = 0; i < row_count; ++i) {
+      // Get candidate ID
+      int64_t id = 0;
+      if (id_col) {
+        const Value& val = id_col->Get(i);
+        if (auto* p = std::get_if<int64_t>(&val)) {
+          id = *p;
+        } else {
+          continue;  // Skip rows without valid ID
+        }
+      } else {
+        continue;
+      }
 
-      auto it = best.find(id);
-      if (it == best.end()) {
-        best[id] = obj;
-      } else if (dedup == "max_base") {
-        // Keep the one with higher base score
-        auto existing_score_opt = it->second.Get(keys::id::SCORE_BASE);
-        auto new_score_opt = obj.Get(keys::id::SCORE_BASE);
-
+      auto it = best_row.find(id);
+      if (it == best_row.end()) {
+        best_row[id] = i;
+      } else if (dedup == "max_base" && score_col) {
+        // Compare scores
         float existing_score = 0.0f;
         float new_score = 0.0f;
 
-        if (existing_score_opt) {
-          if (auto* f = std::get_if<float>(&*existing_score_opt)) {
-            existing_score = *f;
-          }
+        const Value& existing_val = score_col->Get(it->second);
+        if (auto* f = std::get_if<float>(&existing_val)) {
+          existing_score = *f;
         }
-        if (new_score_opt) {
-          if (auto* f = std::get_if<float>(&*new_score_opt)) {
-            new_score = *f;
-          }
+
+        const Value& new_val = score_col->Get(i);
+        if (auto* f = std::get_if<float>(&new_val)) {
+          new_score = *f;
         }
 
         if (new_score > existing_score) {
-          best[id] = obj;
+          best_row[id] = i;
         }
       }
-      // "first" strategy: keep first encountered (already handled by default)
+      // "first" strategy: keep first encountered (default)
     }
 
-    CandidateBatch output;
-    output.reserve(best.size());
-    for (auto& [_, obj] : best) {
-      output.push_back(std::move(obj));
+    // Collect selected row indices
+    std::vector<size_t> selected_rows;
+    selected_rows.reserve(best_row.size());
+    for (const auto& [_, row_idx] : best_row) {
+      selected_rows.push_back(row_idx);
+    }
+
+    // Sort for deterministic output (optional)
+    std::sort(selected_rows.begin(), selected_rows.end());
+
+    // Create output batch with selected rows
+    size_t out_row_count = selected_rows.size();
+    ColumnBatch output(out_row_count);
+
+    // Copy columns, selecting only the chosen rows
+    for (int32_t key_id : input.ColumnKeys()) {
+      auto src_col = input.GetColumn(key_id);
+      if (!src_col) continue;
+
+      auto dst_col = std::make_shared<Column>(out_row_count);
+      for (size_t out_idx = 0; out_idx < out_row_count; ++out_idx) {
+        size_t src_idx = selected_rows[out_idx];
+        dst_col->Set(out_idx, src_col->Get(src_idx));
+      }
+      output.SetColumn(key_id, dst_col);
     }
 
     return output;

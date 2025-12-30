@@ -2,6 +2,7 @@
 #include "nodes/registry.h"
 #include "keys.h"
 #include "expr/expr.h"
+#include "object/batch_builder.h"
 
 #include <nlohmann/json.hpp>
 
@@ -9,6 +10,9 @@ namespace ranking_dsl {
 
 /**
  * core:score_formula - Evaluates an expression and writes the result.
+ *
+ * Uses columnar evaluation: reads input columns, writes output column.
+ * Uses BatchBuilder with COW - original columns are shared.
  *
  * Params:
  *   - expr: ExprIR (the expression to evaluate)
@@ -31,16 +35,25 @@ class ScoreFormulaNode : public NodeRunner {
       expr = SignalExpr{keys::id::SCORE_BASE};
     }
 
-    CandidateBatch output;
-    output.reserve(input.size());
-
-    for (const auto& obj : input) {
-      float result = EvalExpr(expr, obj, ctx.registry);
-      Obj new_obj = obj.Set(output_key, result);
-      output.push_back(std::move(new_obj));
+    size_t row_count = input.RowCount();
+    if (row_count == 0) {
+      return input;
     }
 
-    return output;
+    // Create output column
+    auto output_col = std::make_shared<Column>(row_count);
+
+    // Evaluate expression for each row using columnar API
+    for (size_t i = 0; i < row_count; ++i) {
+      float result = EvalExpr(expr, input, i, ctx.registry);
+      output_col->Set(i, result);
+    }
+
+    // Use BatchBuilder for COW semantics
+    BatchBuilder builder(input);
+    builder.AddColumn(output_key, output_col);
+
+    return builder.Build();
   }
 
   std::string TypeName() const override { return "core:score_formula"; }

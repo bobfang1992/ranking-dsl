@@ -8,6 +8,7 @@
 #include "plan/compiler.h"
 #include "plan/plan.h"
 #include "logging/trace.h"
+#include "keys.h"
 
 using namespace ranking_dsl;
 
@@ -89,29 +90,31 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // Output results
+  // Output results (using columnar API)
   if (!quiet) {
-    fmt::print("\n=== Results ({} candidates) ===\n", result.size());
+    size_t row_count = result.RowCount();
+    fmt::print("\n=== Results ({} candidates) ===\n", row_count);
 
-    size_t count = dump_top > 0 ? std::min(static_cast<size_t>(dump_top), result.size())
-                                : result.size();
+    size_t count = dump_top > 0 ? std::min(static_cast<size_t>(dump_top), row_count)
+                                : row_count;
+
+    // Get columns for faster access
+    auto id_col = result.GetColumn(keys::id::CAND_CANDIDATE_ID);
+    auto score_col = result.GetColumn(keys::id::SCORE_FINAL);
 
     for (size_t i = 0; i < count; ++i) {
-      const auto& obj = result[i];
-
-      auto id_opt = obj.Get(keys::id::CAND_CANDIDATE_ID);
-      auto score_opt = obj.Get(keys::id::SCORE_FINAL);
-
       int64_t id = 0;
       float score = 0.0f;
 
-      if (id_opt) {
-        if (auto* ptr = std::get_if<int64_t>(&*id_opt)) {
+      if (id_col) {
+        const Value& val = id_col->Get(i);
+        if (auto* ptr = std::get_if<int64_t>(&val)) {
           id = *ptr;
         }
       }
-      if (score_opt) {
-        if (auto* ptr = std::get_if<float>(&*score_opt)) {
+      if (score_col) {
+        const Value& val = score_col->Get(i);
+        if (auto* ptr = std::get_if<float>(&val)) {
           score = *ptr;
         }
       }

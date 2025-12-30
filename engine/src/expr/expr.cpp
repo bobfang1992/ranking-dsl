@@ -68,6 +68,33 @@ std::vector<float> GetVectorValue(const Obj& obj, int32_t key_id) {
   return {};
 }
 
+// Get a float value from a ColumnBatch at a specific row
+float GetFloatValueFromBatch(const ColumnBatch& batch, size_t row_index, int32_t key_id) {
+  Value val = batch.GetValue(row_index, key_id);
+  if (IsNull(val)) {
+    return 0.0f;
+  }
+  if (auto* f = std::get_if<float>(&val)) {
+    return *f;
+  }
+  if (auto* i = std::get_if<int64_t>(&val)) {
+    return static_cast<float>(*i);
+  }
+  return 0.0f;
+}
+
+// Get a vector value from a ColumnBatch at a specific row
+std::vector<float> GetVectorValueFromBatch(const ColumnBatch& batch, size_t row_index, int32_t key_id) {
+  Value val = batch.GetValue(row_index, key_id);
+  if (IsNull(val)) {
+    return {};
+  }
+  if (auto* vec = std::get_if<std::vector<float>>(&val)) {
+    return *vec;
+  }
+  return {};
+}
+
 }  // namespace
 
 ExprNode ParseExpr(const nlohmann::json& json, std::string* error_out) {
@@ -277,6 +304,93 @@ std::vector<int32_t> CollectKeyIds(const ExprNode& expr) {
       expr);
 
   return result;
+}
+
+float EvalExpr(const ExprNode& expr, const ColumnBatch& batch, size_t row_index,
+               const KeyRegistry* registry) {
+  return std::visit(
+      [&](auto&& node) -> float {
+        using T = std::decay_t<decltype(node)>;
+
+        if constexpr (std::is_same_v<T, ConstExpr>) {
+          return node.value;
+        }
+
+        else if constexpr (std::is_same_v<T, SignalExpr>) {
+          return GetFloatValueFromBatch(batch, row_index, node.key_id);
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<AddExpr>>) {
+          float sum = 0.0f;
+          for (const auto& arg : node->args) {
+            sum += EvalExpr(arg, batch, row_index, registry);
+          }
+          return sum;
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<MulExpr>>) {
+          float product = 1.0f;
+          for (const auto& arg : node->args) {
+            product *= EvalExpr(arg, batch, row_index, registry);
+          }
+          return product;
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<MinExpr>>) {
+          if (node->args.empty()) return 0.0f;
+          float result = EvalExpr(node->args[0], batch, row_index, registry);
+          for (size_t i = 1; i < node->args.size(); ++i) {
+            result = std::min(result, EvalExpr(node->args[i], batch, row_index, registry));
+          }
+          return result;
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<MaxExpr>>) {
+          if (node->args.empty()) return 0.0f;
+          float result = EvalExpr(node->args[0], batch, row_index, registry);
+          for (size_t i = 1; i < node->args.size(); ++i) {
+            result = std::max(result, EvalExpr(node->args[i], batch, row_index, registry));
+          }
+          return result;
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<CosExpr>>) {
+          // For cos, we need vector values
+          auto get_vec = [&](const ExprNode& e) -> std::vector<float> {
+            if (auto* sig = std::get_if<SignalExpr>(&e)) {
+              return GetVectorValueFromBatch(batch, row_index, sig->key_id);
+            }
+            return {};
+          };
+          auto vec_a = get_vec(node->a);
+          auto vec_b = get_vec(node->b);
+          return CosineSimilarity(vec_a, vec_b);
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<ClampExpr>>) {
+          float x = EvalExpr(node->x, batch, row_index, registry);
+          float lo = EvalExpr(node->lo, batch, row_index, registry);
+          float hi = EvalExpr(node->hi, batch, row_index, registry);
+          return std::clamp(x, lo, hi);
+        }
+
+        else if constexpr (std::is_same_v<T, std::unique_ptr<PenaltyExpr>>) {
+          // Look up penalty.{name} key
+          if (registry) {
+            std::string key_name = "penalty." + node->name;
+            const auto* key_info = registry->GetByName(key_name);
+            if (key_info) {
+              return GetFloatValueFromBatch(batch, row_index, key_info->id);
+            }
+          }
+          return 0.0f;  // Default if not found
+        }
+
+        else {
+          return 0.0f;
+        }
+      },
+      expr);
 }
 
 }  // namespace ranking_dsl

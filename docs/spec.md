@@ -1,4 +1,4 @@
-# Embedded Ranking DSL + JS Nodes Spec (v0.2.3) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
+# Embedded Ranking DSL + JS Nodes Spec (v0.2.4) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
 
 This spec defines an embedded DSL for ranking pipelines where:
 
@@ -192,6 +192,7 @@ To implement immutability efficiently, engines SHOULD use a BatchBuilder:
 
 - On node execution, create `builder = BatchBuilder(input_batch)`
 - `obj.set(key, value)` writes to `builder` at `(key_id, row_idx)`
+- `builder` MAY also support whole-column writes (replacement columns) to enable columnar fast paths (e.g., njs `ctx.batch` writers).
 - On completion, `builder.finish()` returns `output_batch`:
   - unchanged columns are **shared** (zero-copy)
   - updated columns are new arrays (or sparse overlays materialized)
@@ -344,6 +345,37 @@ Governance:
 - engine MUST enforce budgets
 
 ---
+
+
+
+#### 10.2.1 Optional: Column/Batch APIs for njs (`ctx.batch`)
+
+If the engine uses a columnar (SoA) CandidateBatch internally, njs nodes MAY use optional column APIs to reduce per-row overhead. This is a performance optimization; the default RowView (`obj.get/set`) path remains supported.
+
+When enabled, the njs runtime SHOULD expose `ctx.batch`:
+
+- Read APIs (views):
+  - `ctx.batch.rowCount() -> number`
+  - `ctx.batch.f32(key: Key) -> Float32Array` (read-only view)
+  - `ctx.batch.f32vec(key: Key) -> { data: Float32Array, dim: number }` (read-only view)
+- Write APIs (builder-backed; MUST NOT mutate input columns in-place):
+  - `ctx.batch.writeF32(key: Key) -> Float32Array`
+  - `ctx.batch.writeF32Vec(key: Key, dim: number) -> { data: Float32Array, dim: number }`
+
+Governance requirements:
+
+- All writes MUST be restricted to `meta.writes`; all writes MUST pass Key Registry type checks.
+- Reads SHOULD be restricted to `meta.reads` (policy: strict or warn).
+- If `ctx.batch` writers are used, `meta.budget` MAY additionally define:
+  - `max_write_bytes` (total bytes written via column writers)
+  - `max_write_cells` (total cells written via column writers)
+- The engine MUST enforce these budgets (in addition to time/step limits and any existing row-level budgets).
+
+`runBatch` return semantics (recommended):
+
+- If `runBatch` returns an `Obj[]`, the engine uses row-level updates (RowView path).
+- If `runBatch` returns `undefined`/`null`, the engine assumes column writers were used and commits via `builder.finish()`.
+
 
 ## 11. Engine: Compile & Execute
 

@@ -34,7 +34,7 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
       if (error_out) {
         *error_out = "Node not found: " + node_id;
       }
-      return {};
+      return CandidateBatch(0);
     }
 
     // Create runner
@@ -43,15 +43,17 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
       if (error_out) {
         *error_out = "Unknown op: " + spec->op;
       }
-      return {};
+      return CandidateBatch(0);
     }
 
-    // Gather input batches
-    CandidateBatch input;
-    for (const auto& input_id : spec->inputs) {
-      auto it = outputs.find(input_id);
+    // Gather input batch
+    // For now, we take the first input or an empty batch
+    // The merge node handles combining multiple batches
+    CandidateBatch input(0);
+    if (!spec->inputs.empty()) {
+      auto it = outputs.find(spec->inputs[0]);
       if (it != outputs.end()) {
-        input.insert(input.end(), it->second.begin(), it->second.end());
+        input = it->second;
       }
     }
 
@@ -66,7 +68,7 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
     auto duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
     Tracer::LogNodeEnd(plan.plan.name, node_id, spec->op,
-                       duration_ms, input.size(), output.size());
+                       duration_ms, input.RowCount(), output.RowCount());
 
     outputs[node_id] = std::move(output);
   }
@@ -76,7 +78,7 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
     return outputs[plan.topo_order.back()];
   }
 
-  return {};
+  return CandidateBatch(0);
 }
 
 }  // namespace ranking_dsl
