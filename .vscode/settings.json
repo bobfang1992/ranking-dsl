@@ -1,0 +1,6 @@
+{
+    "cmake.sourceDirectory": "/Users/bob/code/ranking-dsl/engine",
+    "files.associations": {
+        "*.njs": "javascript"
+    }
+}
