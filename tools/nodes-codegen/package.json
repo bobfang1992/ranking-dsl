@@ -9,7 +9,7 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@ranking-dsl/shared": "workspace:*",
+    "@ranking-dsl/shared": "*",
     "js-yaml": "^4.1.0",
     "zod": "^3.22.4"
   },

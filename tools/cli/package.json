@@ -14,6 +14,7 @@
   "dependencies": {
     "@ranking-dsl/shared": "*",
     "@ranking-dsl/codegen": "*",
+    "@ranking-dsl/nodes-codegen": "*",
     "@ranking-dsl/lint": "*",
     "@ranking-dsl/expr": "*",
     "@ranking-dsl/plan-compiler": "*",

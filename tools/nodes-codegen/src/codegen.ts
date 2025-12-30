@@ -84,7 +84,11 @@ function generateParamsType(spec: NodeSpec): string {
  */
 function getMethodName(spec: NodeSpec): string {
   const parts = spec.namespace_path.split('.');
-  return parts[parts.length - 1];
+  const lastPart = parts[parts.length - 1];
+  if (!lastPart) {
+    throw new Error(`Invalid namespace_path: ${spec.namespace_path}`);
+  }
+  return lastPart;
 }
 
 /**

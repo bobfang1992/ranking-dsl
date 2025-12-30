@@ -8,6 +8,7 @@
   "references": [
     { "path": "../shared" },
     { "path": "../codegen" },
+    { "path": "../nodes-codegen" },
     { "path": "../lint" },
     { "path": "../expr" },
     { "path": "../plan-compiler" }
