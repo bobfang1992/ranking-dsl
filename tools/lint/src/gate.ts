@@ -294,6 +294,12 @@ function walkNode(node: Node | null | undefined, ctx: WalkContext): void {
       }
       break;
 
+    // New expressions: check for new Function()
+    case 'NewExpression':
+      checkNewExpression(node, ctx);
+      walkChildren(node, { ...ctx, depth: ctx.depth + 1 });
+      break;
+
     // Track statements
     case 'ExpressionStatement':
     case 'VariableDeclaration':
@@ -391,19 +397,28 @@ function checkCallExpression(node: Node, ctx: WalkContext): void {
     return;
   }
 
-  // Check for new Function()
-  if (node.type === 'CallExpression' && 'callee' in node) {
-    // This is handled above
-  }
-
-  // Check for import()
+  // Check for dynamic import()
   if (callee.type === 'Import') {
     ctx.errors.push({
       code: 'E_DYNAMIC_IMPORT',
       message: 'Dynamic import() is not allowed in plan.js',
       loc: locFromNode(node),
     });
-    return;
+  }
+}
+
+function checkNewExpression(node: Node, ctx: WalkContext): void {
+  if (node.type !== 'NewExpression') return;
+
+  const callee = node.callee;
+
+  // Check for new Function()
+  if (callee.type === 'Identifier' && callee.name === 'Function') {
+    ctx.errors.push({
+      code: 'E_FUNCTION_CONSTRUCTOR',
+      message: 'Function constructor is not allowed in plan.js',
+      loc: locFromNode(node),
+    });
   }
 }
 

@@ -124,6 +124,14 @@ describe('runGate', () => {
         expect.objectContaining({ code: 'E_FUNCTION_CONSTRUCTOR' })
       );
     });
+
+    it('rejects new Function()', () => {
+      const result = runGate(`const fn = new Function('return 1');`);
+      expect(result.ok).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ code: 'E_FUNCTION_CONSTRUCTOR' })
+      );
+    });
   });
 
   describe('disallowed: loops', () => {
