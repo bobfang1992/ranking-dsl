@@ -7,29 +7,38 @@ An embedded DSL for building ranking pipelines, with TypeScript tooling and a C+
 - **Plan files** (`*.plan.js`) define ranking pipelines using a fluent DSL
 - **Engine** (C++) compiles and executes plans with high performance
 - **Key Registry** provides type-safe key handles (no free-form string keys)
-- **Expressions** can be authored as Expr IR or JS expression syntax
+- **Expressions** authored using the builder-based Expr IR API (`dsl.F.*`)
+
+## Implementation Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | Complete | Project setup, key registry, Expr IR, core nodes |
+| Phase 1.5 | Complete | Columnar data model (TypedColumn, ColumnBatch, COW), BatchContext APIs |
+| Phase 2 | **Not Implemented** | JS expr sugar (`dsl.expr()`), AST gate, spanId injection |
+| Phase 3 | In Progress | njs runner with QuickJS (MVP complete) |
+
+**Note:** The JS expression sugar syntax (`dsl.expr(() => ...)`) and AST rewriting with spanId injection are Phase 2 features and are **not yet implemented**. Use the builder-based `dsl.F.*` API for expressions.
 
 ## Quick Start
 
 ```bash
 # Install dependencies
-npm install
+npm ci
 
 # Build TypeScript tooling
 npm run build
 
 # Generate key constants from registry
-node tools/cli/dist/index.js codegen
+npm run codegen
 
-# Build C++ engine
-cd engine
-mkdir -p build && cd build
-cmake ..
-make -j
+# Build C++ engine (from repo root)
+cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build-rel -j
 
 # Run tests
-npm test              # TypeScript tests (73 tests)
-ctest                 # C++ tests (11 tests)
+npm test                                    # TypeScript tests (73 tests)
+ctest --test-dir build-rel --output-on-failure  # C++ tests (27 tests)
 ```
 
 ## Project Structure
