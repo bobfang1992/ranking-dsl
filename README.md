@@ -83,7 +83,8 @@ ranking-dsl/
 │   └── tests/                 # Catch2 tests
 ├── docs/
 │   ├── spec.md                # Full specification
-│   └── complexity-governance.md  # Complexity budget docs
+│   ├── complexity-governance.md  # Complexity budget docs
+│   └── workflows.md           # Engineer workflows guide
 ├── plans/                     # Example plan files
 ├── njs/                       # JavaScript node modules
 └── test-fixtures/             # Test fixture files
@@ -178,6 +179,18 @@ Plan files (`*.plan.js`) are validated by a static gate that enforces a restrict
 | **Arrow functions** | Outside `dsl.expr()` | `E_ARROW_OUTSIDE_EXPR` |
 | **Dangerous globals** | `process`, `fs`, `fetch`, `setTimeout`, `globalThis`, etc. | `E_DISALLOWED_GLOBAL` |
 
+### Injected Globals
+
+Plan files execute in a sandboxed VM with the following frozen globals injected by the compiler:
+
+| Global | Description |
+|--------|-------------|
+| `Keys` | Key registry constants (e.g., `Keys.SCORE_BASE`, `Keys.FEAT_FRESHNESS`) |
+| `dsl` | DSL builder API (e.g., `dsl.core.sourcer()`, `dsl.F.add()`) |
+| `config` | User-provided configuration object |
+
+**Important:** Do NOT use `require()` or `import` to access these - they are automatically available and imports are forbidden by the static gate.
+
 ### Complexity Limits
 
 | Limit | Default | Error Code |
@@ -191,19 +204,28 @@ Plan files (`*.plan.js`) are validated by a static gate that enforces a restrict
 
 ```javascript
 // plan.js - configuration-driven pipeline
+// NOTE: Phase 2 not yet implemented - this shows the intended API
+// Keys, dsl, config are injected globals (no require/import needed)
 const alpha = config.useNewModel ? 0.8 : 0.7;
 
-let p = dsl.sourcer("main", { limit: 1000 });
+// Use namespaced API (generated from NodeSpec catalog)
+let p = dsl.core.sourcer("main", { limit: 1000 });
 
 if (config.enableFeatures) {
-  p = p.features("base", { keys: [Keys.FEAT_A, Keys.FEAT_B] });
+  p = p.core.features("base", { keys: [Keys.FEAT_FRESHNESS, Keys.FEAT_EMBEDDING] });
 }
 
-p = p.model("ranking_v2", { threshold: 0.5 });
+p = p.core.model("ranking_v2", { threshold: 0.5 });
 
-// Arrow function allowed inside dsl.expr()
-p = p.score(dsl.expr(() => alpha * Keys.SCORE_BASE + (1 - alpha) * Keys.SCORE_ML), {
-  output_key_id: Keys.SCORE_FINAL.id
+// Build expression using dsl.F builder API
+const F = dsl.F;
+const blendExpr = F.add(
+  F.mul(F.const(alpha), F.signal(Keys.SCORE_BASE)),
+  F.mul(F.const(1 - alpha), F.signal(Keys.SCORE_ML))
+);
+
+p = p.core.score(blendExpr, {
+  output_key_id: Keys.SCORE_FINAL
 });
 
 return p.build();
@@ -221,12 +243,13 @@ const expr = F.add(
 );
 ```
 
-Or using JS expression syntax (Phase 2):
+**Future:** JS expression syntax (Phase 2, not yet implemented):
 
 ```javascript
+// This will be available once Phase 2 is complete
 p = p.score(
   dsl.expr(() => 0.7 * Keys.SCORE_BASE + 0.3 * Keys.SCORE_ML),
-  { output_key_id: Keys.SCORE_FINAL.id }
+  { output_key_id: Keys.SCORE_FINAL }
 );
 ```
 
@@ -458,6 +481,12 @@ ctest --test-dir build-rel -V        # Verbose test output
 │             │     │  (C++)      │     │  Compile    │
 └─────────────┘     └─────────────┘     └─────────────┘
 ```
+
+## Documentation
+
+- **[Workflows Guide](docs/workflows.md)** - Typical workflows for ranking and infra engineers
+- **[Full Specification](docs/spec.md)** - Complete DSL specification (v0.2.8)
+- **[Complexity Governance](docs/complexity-governance.md)** - Plan complexity budgets and enforcement
 
 ## License
 
