@@ -179,6 +179,18 @@ Plan files (`*.plan.js`) are validated by a static gate that enforces a restrict
 | **Arrow functions** | Outside `dsl.expr()` | `E_ARROW_OUTSIDE_EXPR` |
 | **Dangerous globals** | `process`, `fs`, `fetch`, `setTimeout`, `globalThis`, etc. | `E_DISALLOWED_GLOBAL` |
 
+### Injected Globals
+
+Plan files execute in a sandboxed VM with the following frozen globals injected by the compiler:
+
+| Global | Description |
+|--------|-------------|
+| `Keys` | Key registry constants (e.g., `Keys.SCORE_BASE`, `Keys.FEAT_FRESHNESS`) |
+| `dsl` | DSL builder API (e.g., `dsl.core.sourcer()`, `dsl.F.add()`) |
+| `config` | User-provided configuration object |
+
+**Important:** Do NOT use `require()` or `import` to access these - they are automatically available and imports are forbidden by the static gate.
+
 ### Complexity Limits
 
 | Limit | Default | Error Code |
@@ -193,6 +205,7 @@ Plan files (`*.plan.js`) are validated by a static gate that enforces a restrict
 ```javascript
 // plan.js - configuration-driven pipeline
 // NOTE: Phase 2 not yet implemented - this shows the intended API
+// Keys, dsl, config are injected globals (no require/import needed)
 const alpha = config.useNewModel ? 0.8 : 0.7;
 
 // Use namespaced API (generated from NodeSpec catalog)

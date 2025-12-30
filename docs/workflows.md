@@ -45,8 +45,8 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
    ```javascript
    // plans/my_feature.plan.js
 
-   // Import generated Keys
-   const Keys = require('../keys/generated/keys.njs');
+   // Keys, dsl, and config are injected as frozen globals by the plan compiler
+   // No imports/requires needed (and they're disallowed by the static gate)
 
    // Configuration (can be parameterized)
    const config = {
