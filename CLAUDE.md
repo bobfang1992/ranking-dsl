@@ -13,6 +13,28 @@ This document outlines the implementation plan for an embedded DSL for ranking p
 
 ---
 
+## Development Workflow
+
+**All changes must go through Pull Requests:**
+1. Create a feature branch from `main`
+2. Make changes and commit
+3. Push branch and create PR
+4. Wait for CI to pass
+5. Merge PR to `main`
+
+```bash
+# Example workflow
+git checkout main && git pull
+git checkout -b feature/my-change
+# ... make changes ...
+git add -A && git commit -m "feat: description"
+git push -u origin feature/my-change
+gh pr create --fill
+# After CI passes and review, merge via GitHub
+```
+
+---
+
 ## Key Design Decisions
 
 | Decision | Choice |
