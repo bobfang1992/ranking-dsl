@@ -19,6 +19,7 @@ An embedded DSL for building ranking pipelines, with TypeScript tooling and a C+
 | Phase 3 | Complete | njs runner with QuickJS, column-level APIs, budget enforcement |
 | Phase 3.5 | Complete | njs sandbox with policy-gated host IO (`ctx.io.readCsv`) |
 | Phase 3.6 | Complete | Plan complexity governance (two-layer TS/C++ enforcement) |
+| Phase 3.7 | Complete | Node-level trace_key and njs trace prefixing |
 
 **Note:** The JS expression sugar syntax (`dsl.expr(() => ...)`) and AST rewriting with spanId injection are Phase 2 features and are **not yet implemented**. Use the builder-based `dsl.F.*` API for expressions.
 
@@ -39,8 +40,8 @@ cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build-rel -j
 
 # Run tests
-npm test                                    # TypeScript tests (86 tests)
-ctest --test-dir build-rel --output-on-failure  # C++ tests (41 test cases)
+npm test                                    # TypeScript tests (102 tests)
+ctest --test-dir build-rel --output-on-failure  # C++ tests (43 test cases)
 ```
 
 ## Project Structure
@@ -172,6 +173,29 @@ p = p.score(
 | `core:model` | Run ML model, write score |
 | `core:score_formula` | Evaluate expression, write result |
 | `njs` | Execute JavaScript module (QuickJS) |
+
+## Tracing
+
+Nodes support optional `trace_key` for stable identification in logs and spans:
+
+```javascript
+// In plan.js (Phase 2)
+p = p.model("vm_v1", { /* params */ }, { trace_key: "final_vm" })
+     .score(expr, {}, { trace_key: "final_score" });
+```
+
+**trace_key constraints:**
+- Length: 1-64 characters
+- Charset: `[A-Za-z0-9._/-]`
+- Appears in node JSON envelope (NOT inside params)
+
+**Span naming:**
+- With trace_key: `core:model(final_vm)`
+- Without trace_key: `core:model`
+
+**njs trace prefixing:**
+- Filename stem becomes `trace_prefix` (e.g., `rank_vm.njs` → `rank_vm`)
+- Nested calls: `{trace_prefix}::{child_trace_key}`
 
 ## Complexity Governance
 
