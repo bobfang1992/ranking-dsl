@@ -23,7 +23,7 @@ json WritesDescriptorToJson(const WritesDescriptor& writes, const KeyRegistry& k
     j["kind"] = "static";
     j["keys"] = json::array();
     for (int32_t key_id : writes.static_keys) {
-      auto* key_info = key_registry.GetKeyInfo(key_id);
+      auto* key_info = key_registry.GetById(key_id);
       json key_obj;
       key_obj["id"] = key_id;
       if (key_info) {
@@ -62,7 +62,7 @@ json NodeSpecToJson(const NodeSpec& spec, const KeyRegistry& key_registry) {
   // Reads
   j["reads"] = json::array();
   for (int32_t key_id : spec.reads) {
-    auto* key_info = key_registry.GetKeyInfo(key_id);
+    auto* key_info = key_registry.GetById(key_id);
     json key_obj;
     key_obj["id"] = key_id;
     if (key_info) {

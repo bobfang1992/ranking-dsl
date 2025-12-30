@@ -12,9 +12,9 @@
 namespace ranking_dsl {
 
 /**
- * Node specification in a plan.
+ * Node instance in a plan (renamed from NodeSpec to avoid conflict with node metadata).
  */
-struct NodeSpec {
+struct PlanNode {
   std::string id;
   std::string op;
   std::vector<std::string> inputs;
@@ -42,7 +42,7 @@ struct PlanLogging {
 struct Plan {
   std::string name;
   int version = 1;
-  std::vector<NodeSpec> nodes;
+  std::vector<PlanNode> nodes;
   PlanLogging logging;
 };
 

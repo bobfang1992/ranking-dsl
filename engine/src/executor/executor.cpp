@@ -23,7 +23,7 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
   std::unordered_map<std::string, CandidateBatch> outputs;
 
   // Build node lookup
-  std::unordered_map<std::string, const NodeSpec*> node_by_id;
+  std::unordered_map<std::string, const PlanNode*> node_by_id;
   for (const auto& node : plan.plan.nodes) {
     node_by_id[node.id] = &node;
   }
