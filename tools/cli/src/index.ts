@@ -6,8 +6,16 @@
  */
 
 import { Command } from 'commander';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { runCodegen } from '@ranking-dsl/codegen';
+import {
+  computeComplexityMetrics,
+  checkComplexityBudget,
+  parseBudgetFromJson,
+  defaultBudget,
+  type Plan,
+} from '@ranking-dsl/shared';
 
 const program = new Command();
 
@@ -44,6 +52,93 @@ program
       for (const error of result.errors) {
         console.error(`  ${error}`);
       }
+      process.exit(1);
+    }
+  });
+
+program
+  .command('validate')
+  .description('Validate a plan.json file against complexity budgets')
+  .argument('<plan>', 'Path to plan.json file')
+  .option('-b, --budget <path>', 'Path to complexity budget JSON file', 'configs/complexity_budgets.json')
+  .option('--json', 'Output metrics as JSON')
+  .action((planPath, options) => {
+    try {
+      // Load plan
+      const planFile = path.resolve(planPath);
+      if (!fs.existsSync(planFile)) {
+        console.error(`Error: Plan file not found: ${planFile}`);
+        process.exit(1);
+      }
+      const plan: Plan = JSON.parse(fs.readFileSync(planFile, 'utf-8'));
+
+      // Load budget
+      let budget = defaultBudget();
+      const budgetFile = path.resolve(options.budget);
+      if (fs.existsSync(budgetFile)) {
+        const budgetJson = fs.readFileSync(budgetFile, 'utf-8');
+        budget = parseBudgetFromJson(budgetJson);
+      } else if (options.budget !== 'configs/complexity_budgets.json') {
+        console.error(`Error: Budget file not found: ${budgetFile}`);
+        process.exit(1);
+      }
+
+      // Compute metrics (use budget's score weights if provided)
+      const metrics = computeComplexityMetrics(plan, 5, budget.scoreWeights);
+      const result = checkComplexityBudget(metrics, budget);
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          passed: result.passed,
+          hasWarnings: result.hasWarnings,
+          metrics: {
+            nodeCount: metrics.nodeCount,
+            edgeCount: metrics.edgeCount,
+            maxDepth: metrics.maxDepth,
+            fanoutPeak: metrics.fanoutPeak,
+            faninPeak: metrics.faninPeak,
+            complexityScore: metrics.complexityScore,
+          },
+          violations: result.violations,
+          warnings: result.warnings,
+        }, null, 2));
+      } else {
+        console.log(`Plan: ${planPath}`);
+        console.log(`Metrics:`);
+        console.log(`  node_count:       ${metrics.nodeCount}`);
+        console.log(`  edge_count:       ${metrics.edgeCount}`);
+        console.log(`  max_depth:        ${metrics.maxDepth}`);
+        console.log(`  fanout_peak:      ${metrics.fanoutPeak}`);
+        console.log(`  fanin_peak:       ${metrics.faninPeak}`);
+        console.log(`  complexity_score: ${metrics.complexityScore}`);
+
+        if (result.violations.length > 0) {
+          console.log(`\nViolations (hard limit exceeded):`);
+          for (const v of result.violations) {
+            console.log(`  - ${v}`);
+          }
+        }
+
+        if (result.warnings.length > 0) {
+          console.log(`\nWarnings (soft limit exceeded):`);
+          for (const w of result.warnings) {
+            console.log(`  - ${w}`);
+          }
+        }
+
+        if (result.passed) {
+          console.log(`\nResult: PASSED`);
+        } else {
+          console.log(`\nResult: FAILED`);
+          if (result.diagnostics) {
+            console.log(`\n${result.diagnostics}`);
+          }
+        }
+      }
+
+      process.exit(result.passed ? 0 : 1);
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });

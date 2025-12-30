@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "description": "Plan complexity budgets - shared between TypeScript CLI and C++ engine",
+  "hard": {
+    "node_count": 2000,
+    "max_depth": 120,
+    "fanout_peak": 16,
+    "fanin_peak": 16
+  },
+  "soft": {
+    "edge_count": 10000,
+    "complexity_score": 8000
+  },
+  "score_weights": {
+    "node_count": 1.0,
+    "max_depth": 5.0,
+    "fanout_peak": 2.0,
+    "fanin_peak": 2.0,
+    "edge_count": 0.5
+  }
+}

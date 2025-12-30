@@ -7,6 +7,7 @@
 #include "executor/executor.h"
 #include "keys/registry.h"
 #include "plan/compiler.h"
+#include "plan/complexity.h"
 #include "plan/plan.h"
 #include "logging/trace.h"
 #include "keys.h"
@@ -18,8 +19,10 @@ int main(int argc, char* argv[]) {
 
   std::string plan_path;
   std::string keys_path;
+  std::string budget_path;
   int dump_top = 0;
   bool quiet = false;
+  bool no_complexity_check = false;
 
   app.add_option("plan", plan_path, "Path to compiled plan.json")
       ->required()
@@ -28,10 +31,15 @@ int main(int argc, char* argv[]) {
   app.add_option("--keys,-k", keys_path, "Path to keys.json (uses compiled-in keys if not specified)")
       ->check(CLI::ExistingFile);
 
+  app.add_option("--budget,-b", budget_path, "Path to complexity budget JSON file")
+      ->check(CLI::ExistingFile);
+
   app.add_option("--dump-top,-n", dump_top, "Number of top results to display")
       ->check(CLI::NonNegativeNumber);
 
   app.add_flag("--quiet,-q", quiet, "Suppress output except errors");
+
+  app.add_flag("--no-complexity-check", no_complexity_check, "Disable complexity checking");
 
   CLI11_PARSE(app, argc, argv);
 
@@ -59,8 +67,21 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // Compile plan
+  // Compile plan with complexity checking
   PlanCompiler compiler(registry);
+
+  if (no_complexity_check) {
+    compiler.DisableComplexityCheck();
+  } else if (!budget_path.empty()) {
+    auto budget = ComplexityBudget::LoadFromFile(budget_path, &error);
+    if (!error.empty()) {
+      fmt::print(stderr, "Error loading complexity budget: {}\n", error);
+      return 1;
+    }
+    compiler.SetComplexityBudget(budget);
+  }
+  // If no budget specified and complexity check enabled, uses default budget
+
   CompiledPlan compiled;
   if (!compiler.Compile(plan, compiled, &error)) {
     fmt::print(stderr, "Error compiling plan: {}\n", error);

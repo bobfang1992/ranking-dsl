@@ -5,10 +5,19 @@
 #include <unordered_set>
 
 #include "keys/registry.h"
+#include "plan/complexity.h"
 
 namespace ranking_dsl {
 
 PlanCompiler::PlanCompiler(const KeyRegistry& registry) : registry_(registry) {}
+
+void PlanCompiler::SetComplexityBudget(const ComplexityBudget& budget) {
+  budget_ = budget;
+}
+
+void PlanCompiler::DisableComplexityCheck() {
+  complexity_check_enabled_ = false;
+}
 
 bool PlanCompiler::Compile(const Plan& plan, CompiledPlan& out, std::string* error_out) {
   // Validate node IDs are unique
@@ -27,8 +36,40 @@ bool PlanCompiler::Compile(const Plan& plan, CompiledPlan& out, std::string* err
     return false;
   }
 
+  // Validate complexity budgets
+  ComplexityMetrics metrics;
+  if (!ValidateComplexity(plan, metrics, error_out)) {
+    return false;
+  }
+
   out.plan = plan;
   out.topo_order = std::move(topo_order);
+  out.complexity = std::move(metrics);
+  return true;
+}
+
+bool PlanCompiler::ValidateComplexity(const Plan& plan, ComplexityMetrics& metrics, std::string* error_out) {
+  // Compute metrics (always, for reporting)
+  metrics = ComputeComplexityMetrics(plan);
+
+  // Skip enforcement if disabled
+  if (!complexity_check_enabled_) {
+    return true;
+  }
+
+  // Use provided budget or default
+  ComplexityBudget budget = budget_.value_or(ComplexityBudget::Default());
+
+  // Check against budget
+  ComplexityCheckResult result = CheckComplexityBudget(metrics, budget);
+
+  if (!result.passed) {
+    if (error_out) {
+      *error_out = result.diagnostics;
+    }
+    return false;
+  }
+
   return true;
 }
 
