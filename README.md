@@ -17,6 +17,8 @@ An embedded DSL for building ranking pipelines, with TypeScript tooling and a C+
 | Phase 1.5 | Complete | Columnar data model (TypedColumn, ColumnBatch, COW), BatchContext APIs |
 | Phase 2 | **Not Implemented** | JS expr sugar (`dsl.expr()`), AST gate, spanId injection |
 | Phase 3 | Complete | njs runner with QuickJS, column-level APIs, budget enforcement |
+| Phase 3.5 | Complete | njs sandbox with policy-gated host IO (`ctx.io.readCsv`) |
+| Phase 3.6 | Complete | Plan complexity governance (two-layer TS/C++ enforcement) |
 
 **Note:** The JS expression sugar syntax (`dsl.expr(() => ...)`) and AST rewriting with spanId injection are Phase 2 features and are **not yet implemented**. Use the builder-based `dsl.F.*` API for expressions.
 
@@ -37,14 +39,16 @@ cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build-rel -j
 
 # Run tests
-npm test                                    # TypeScript tests (73 tests)
-ctest --test-dir build-rel --output-on-failure  # C++ tests (27 tests)
+npm test                                    # TypeScript tests (86 tests)
+ctest --test-dir build-rel --output-on-failure  # C++ tests (41 test cases)
 ```
 
 ## Project Structure
 
 ```
 ranking-dsl/
+├── configs/
+│   └── complexity_budgets.json  # Plan complexity limits (shared TS/C++)
 ├── keys/
 │   ├── registry.yaml          # Key definitions (source of truth)
 │   └── generated/             # Generated key constants
@@ -53,7 +57,7 @@ ranking-dsl/
 │       ├── keys.json          # Runtime (for engine)
 │       └── keys.njs           # CommonJS (for njs modules)
 ├── tools/
-│   ├── shared/                # Common types, Expr IR
+│   ├── shared/                # Common types, Expr IR, complexity
 │   ├── codegen/               # Registry → generated files
 │   ├── lint/                  # plan.js static gate (Phase 2)
 │   ├── expr/                  # JS expr → Expr IR (Phase 2)
@@ -64,13 +68,17 @@ ranking-dsl/
 │   │   ├── keys/              # Key registry runtime
 │   │   ├── object/            # Value, Obj, CandidateBatch
 │   │   ├── expr/              # Expression evaluation
-│   │   ├── plan/              # Plan parsing & compilation
+│   │   ├── plan/              # Plan parsing, compilation, complexity
 │   │   ├── nodes/             # Node runners (core + js)
 │   │   ├── executor/          # Pipeline executor
 │   │   └── logging/           # Structured tracing
 │   └── tests/                 # Catch2 tests
+├── docs/
+│   ├── spec.md                # Full specification
+│   └── complexity-governance.md  # Complexity budget docs
 ├── plans/                     # Example plan files
-└── njs/                       # JavaScript node modules
+├── njs/                       # JavaScript node modules
+└── test-fixtures/             # Test fixture files
 ```
 
 ## CLI Commands
@@ -82,14 +90,21 @@ npm run codegen
 # Check if generated files are up to date (for CI)
 node tools/cli/dist/index.js codegen --check
 
+# Validate a plan against complexity budgets
+node tools/cli/dist/index.js validate plan.json
+node tools/cli/dist/index.js validate plan.json --budget configs/complexity_budgets.json
+node tools/cli/dist/index.js validate plan.json --json  # Output as JSON
+
 # Run the engine on a compiled plan
 ./build-rel/engine/rankdsl_engine plan.json [OPTIONS]
 
 # Engine options:
-#   -k, --keys <file>     Path to keys.json (uses compiled-in keys if not specified)
-#   -n, --dump-top <N>    Number of top results to display
-#   -q, --quiet           Suppress output except errors
-#   -h, --help            Print help message
+#   -k, --keys <file>       Path to keys.json (uses compiled-in keys if not specified)
+#   -b, --budget <file>     Path to complexity budget JSON file
+#   -n, --dump-top <N>      Number of top results to display
+#   -q, --quiet             Suppress output except errors
+#   --no-complexity-check   Disable complexity checking
+#   -h, --help              Print help message
 ```
 
 ## Key Registry
@@ -158,6 +173,32 @@ p = p.score(
 | `core:score_formula` | Evaluate expression, write result |
 | `njs` | Execute JavaScript module (QuickJS) |
 
+## Complexity Governance
+
+Plans are validated against complexity budgets to keep pipelines auditable and debuggable. Budgets are defined in `configs/complexity_budgets.json`:
+
+```json
+{
+  "hard": { "node_count": 2000, "max_depth": 120, "fanout_peak": 16, "fanin_peak": 16 },
+  "soft": { "edge_count": 10000, "complexity_score": 8000 }
+}
+```
+
+**Metrics:**
+| Metric | Description |
+|--------|-------------|
+| `node_count` | Total nodes in plan DAG |
+| `edge_count` | Total edges in plan DAG |
+| `max_depth` | Longest path length |
+| `fanout_peak` | Maximum out-degree |
+| `fanin_peak` | Maximum in-degree |
+| `complexity_score` | Weighted combination |
+
+- **Hard limits**: Compilation fails if exceeded
+- **Soft limits**: Warnings emitted
+
+See `docs/complexity-governance.md` for full details.
+
 ## njs Modules
 
 Custom ranking logic can be implemented in JavaScript using `.njs` modules:
@@ -196,9 +237,17 @@ exports.runBatch = function(objs, ctx, params) {
 | `writeF32(key)` | Allocate writable f32 column |
 | `writeI64(key)` | Allocate writable i64 column |
 
+**ctx.io API (Host IO):**
+| Method | Description |
+|--------|-------------|
+| `readCsv(path)` | Read CSV file, returns array of objects |
+
+Host IO requires `meta.capabilities: ["io"]` and paths must be in policy allowlist.
+
 **Enforcement:**
 - `meta.writes` - Only listed keys can be written
-- `meta.budget` - `max_write_cells` and `max_write_bytes` limits enforced
+- `meta.capabilities` - Must declare `["io"]` to use `ctx.io.*`
+- `meta.budget` - `max_write_cells`, `max_write_bytes`, `max_io_bytes_read` limits enforced
 
 ## Development
 
