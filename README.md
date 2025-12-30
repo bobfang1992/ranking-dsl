@@ -15,7 +15,8 @@ An embedded DSL for building ranking pipelines, with TypeScript tooling and a C+
 |-------|--------|-------------|
 | Phase 1 | Complete | Project setup, key registry, Expr IR, core nodes |
 | Phase 1.5 | Complete | Columnar data model (TypedColumn, ColumnBatch, COW), BatchContext APIs |
-| Phase 2 | **Not Implemented** | JS expr sugar (`dsl.expr()`), AST gate, spanId injection |
+| Phase 2.1 | Complete | Static gate (AST linter for plan.js) |
+| Phase 2.2-2.5 | **Not Implemented** | JS expr sugar (`dsl.expr()`), spanId injection, plan compiler |
 | Phase 3 | Complete | njs runner with QuickJS, column-level APIs, budget enforcement |
 | Phase 3.5 | Complete | njs sandbox with policy-gated host IO (`ctx.io.readCsv`) |
 | Phase 3.6 | Complete | Plan complexity governance (two-layer TS/C++ enforcement) |
@@ -40,7 +41,7 @@ cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build-rel -j
 
 # Run tests
-npm test                                    # TypeScript tests (102 tests)
+npm test                                    # TypeScript tests (144 tests)
 ctest --test-dir build-rel --output-on-failure  # C++ tests (43 test cases)
 ```
 
@@ -128,6 +129,68 @@ keys:
 - Names are lowercase with dots (e.g., `score.base`)
 - Types: `bool`, `i64`, `f32`, `string`, `bytes`, `f32vec`
 - Scopes: `candidate`, `feature`, `score`, `debug`, `tmp`, `penalty`
+
+## Plan.js Syntax Rules
+
+Plan files (`*.plan.js`) are validated by a static gate that enforces a restricted JavaScript subset. This keeps plans simple, auditable, and free from side effects.
+
+### Allowed Syntax
+
+| Category | Allowed |
+|----------|---------|
+| **Declarations** | `const`, `let`, `var` |
+| **Literals** | Numbers, strings, booleans, `null`, `undefined`, template literals |
+| **Data structures** | Object literals `{}`, array literals `[]` |
+| **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `===`, `<`, `>`), logical (`&&`, `\|\|`, `!`) |
+| **Control flow** | `if`/`else`, ternary `? :`, `switch`/`case` |
+| **Functions** | Function declarations, function expressions (non-async, non-generator) |
+| **Expressions** | Property access, method calls, `dsl.*` APIs |
+| **Special** | Arrow functions **only inside `dsl.expr()`** |
+
+### Disallowed Syntax
+
+| Category | Disallowed | Error Code |
+|----------|------------|------------|
+| **Modules** | `import`, `export` | `E_PARSE_ERROR` |
+| **Dynamic loading** | `require()`, dynamic `import()` | `E_REQUIRE_CALL`, `E_DYNAMIC_IMPORT` |
+| **Code generation** | `eval()`, `Function()`, `new Function()` | `E_EVAL_CALL`, `E_FUNCTION_CONSTRUCTOR` |
+| **Loops** | `for`, `while`, `do-while`, `for-in`, `for-of` | `E_LOOP_STATEMENT` |
+| **Classes** | `class` declarations/expressions | `E_CLASS_DECLARATION` |
+| **Async/Generators** | `async function`, `function*`, `async () =>` | `E_ASYNC_FUNCTION`, `E_GENERATOR_FUNCTION` |
+| **Legacy** | `with` statement | `E_WITH_STATEMENT` |
+| **Arrow functions** | Outside `dsl.expr()` | `E_ARROW_OUTSIDE_EXPR` |
+| **Dangerous globals** | `process`, `fs`, `fetch`, `setTimeout`, `globalThis`, etc. | `E_DISALLOWED_GLOBAL` |
+
+### Complexity Limits
+
+| Limit | Default | Error Code |
+|-------|---------|------------|
+| File size | 50 KB | `E_FILE_TOO_LARGE` |
+| Max nesting depth | 10 | `E_NESTING_TOO_DEEP` |
+| Max branches | 50 | `E_TOO_MANY_BRANCHES` |
+| Max statements | 200 | `E_TOO_MANY_STATEMENTS` |
+
+### Example Valid Plan
+
+```javascript
+// plan.js - configuration-driven pipeline
+const alpha = config.useNewModel ? 0.8 : 0.7;
+
+let p = dsl.sourcer("main", { limit: 1000 });
+
+if (config.enableFeatures) {
+  p = p.features("base", { keys: [Keys.FEAT_A, Keys.FEAT_B] });
+}
+
+p = p.model("ranking_v2", { threshold: 0.5 });
+
+// Arrow function allowed inside dsl.expr()
+p = p.score(dsl.expr(() => alpha * Keys.SCORE_BASE + (1 - alpha) * Keys.SCORE_ML), {
+  output_key_id: Keys.SCORE_FINAL.id
+});
+
+return p.build();
+```
 
 ## Expressions
 
