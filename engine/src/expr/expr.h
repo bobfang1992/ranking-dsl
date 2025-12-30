@@ -7,6 +7,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include "object/column_batch.h"
 #include "object/obj.h"
 #include "object/value.h"
 
@@ -94,6 +95,19 @@ ExprNode ParseExpr(const nlohmann::json& json, std::string* error_out = nullptr)
  * @return The evaluated result
  */
 float EvalExpr(const ExprNode& expr, const Obj& obj, const KeyRegistry* registry = nullptr);
+
+/**
+ * Evaluate an expression against a ColumnBatch at a specific row.
+ * Returns the result as a float (expressions are expected to produce numeric results).
+ *
+ * @param expr The expression to evaluate
+ * @param batch The batch to read signals from
+ * @param row_index The row index to evaluate at
+ * @param registry Key registry for penalty lookups
+ * @return The evaluated result
+ */
+float EvalExpr(const ExprNode& expr, const ColumnBatch& batch, size_t row_index,
+               const KeyRegistry* registry = nullptr);
 
 /**
  * Collect all key IDs referenced by an expression.

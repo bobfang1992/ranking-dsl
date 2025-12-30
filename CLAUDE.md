@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the implementation plan for an embedded DSL for ranking pipelines, based on `docs/spec.md` (v0.2.2).
+This document outlines the implementation plan for an embedded DSL for ranking pipelines, based on `docs/spec.md` (v0.2.4).
 
 **Architecture Summary:**
 - **Plan files** (`*.plan.js`) build a Plan (pure JSON data) using a DSL
@@ -21,14 +21,19 @@ This document outlines the implementation plan for an embedded DSL for ranking p
 | Engine language | C++20 |
 | C++ formatting/logging | `fmt` library |
 | Tooling tests | Vitest |
-| C++ tests | Catch2 or GoogleTest |
+| C++ tests | Catch2 |
 | Division in MVP | Excluded (reject `/` in translator, `div` reserved but not implemented) |
 | JS Expr function calls | **Must use `dsl.fn.*` namespace** (no bare `cos()`, `min()`, etc.) |
 | `cos(a,b)` semantics | Cosine similarity: `dot(a,b) / (‖a‖ * ‖b‖)`, returns 0 if norm is zero, clamps to [-1,1] |
 | JS Expr token binding | **AST rewrite with spanId injection** (see High-Risk Areas) |
+| JS Expr translation | **Compile-time via keys.json** - NOT runtime inspection (see below) |
 | Key registry runtime | C++ engine loads `keys.json` at runtime for validation |
 | Penalty semantics | Read penalty value from a designated penalty key in registry |
-| Obj implementation | Copying map (immutable by semantics; structural sharing deferred) |
+| Obj implementation | **RowView** over `(ColumnBatch, rowIndex)` - immutable semantics via BatchBuilder |
+| Internal data model | **Columnar (SoA)**: Typed columns (`F32Column`, `I64Column`, `F32VecColumn`) |
+| f32vec storage | **Contiguous N×D** with dimension metadata, NOT per-row vectors |
+| njs JS runtime | **QuickJS** (simpler step limits, smaller footprint) |
+| Builder finalize method | **`build()`** everywhere (not `finish()`)
 
 ---
 
@@ -97,6 +102,39 @@ This document outlines the implementation plan for an embedded DSL for ranking p
 
 **Rationale:** Prevents name shadowing, keeps expression surface deterministic and auditable.
 
+### 2b. JS Expr Translation: Compile-Time via keys.json
+
+**CRITICAL:** Expression translation happens at compile time using only:
+1. Source AST (from plan.js)
+2. `keys/generated/keys.json` (registry mapping)
+
+**NOT** by inspecting runtime `Keys` object values.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CORRECT: Compile-time translation                                           │
+│  ─────────────────────────────────                                           │
+│  Source: Keys.SCORE_BASE                                                     │
+│  ↓ AST node: MemberExpression { object: "Keys", property: "SCORE_BASE" }     │
+│  ↓ Lookup "SCORE_BASE" in keys.json → { id: 3001, type: "f32", ... }         │
+│  ↓ Emit: { "op": "signal", "key_id": 3001 }                                  │
+│                                                                              │
+│  WRONG: Runtime inspection                                                   │
+│  ────────────────────────────                                                │
+│  Execute code → Keys.SCORE_BASE evaluates to 3001 → emit signal(3001)        │
+│  ✗ Breaks when plan.js has branching, dead code, or conditional Keys refs    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Implementation:**
+- Translator receives: spanId → AST node
+- Translator loads: `keys.json` at startup
+- For `MemberExpression` where `object.name === "Keys"`:
+  - Extract `property.name` (e.g., "SCORE_BASE")
+  - Lookup in keys.json by name → get `id` and `type`
+  - Emit `{ "op": "signal", "key_id": <id> }`
+- For unknown key names: error with source span
+
 ### 3. VM Sandbox Threat Model
 
 **MVP Threat Model:**
@@ -117,19 +155,20 @@ This document outlines the implementation plan for an embedded DSL for ranking p
 **Future (if needed):**
 - For untrusted plan.js: use separate process, QuickJS isolate, or OS-level sandbox
 
-### 4. njs Runner: Minimal Working Implementation (Not Stub)
+### 4. njs Runner with Columnar APIs (v0.2.4)
 
-njs is a core escape hatch for custom logic. MVP must include a working implementation.
+njs is a core escape hatch for custom logic. MVP must include a working implementation with both row-level and column-level APIs.
 
 **MVP njs Requirements:**
 - [ ] Load `.njs` module from `njs/**` path
 - [ ] Parse and validate `meta` object (name, version, reads, writes, params, budget)
 - [ ] Call `runBatch(objs, ctx, params)` (primary) or `run(obj, ctx, params)` (fallback)
 - [ ] **Enforce `meta.writes`**: `obj.set(key, v)` fails if `key` not in `meta.writes`
-- [ ] **Enforce budget**: at minimum, step limit or wall-clock time limit per batch
-- [ ] Return modified objects to pipeline
+- [ ] **Enforce budget**: `max_ms_per_1k`, `max_set_per_obj`, `max_write_bytes`, `max_write_cells`
+- [ ] Provide columnar APIs via `ctx.batch`
+- [ ] Handle return semantics: `Obj[]` vs `undefined/null`
 
-**njs Module Contract:**
+**njs Module Contract (Row-Level):**
 ```js
 export const meta = {
   name: "example",
@@ -137,9 +176,10 @@ export const meta = {
   reads:  [Keys.SCORE_BASE],
   writes: [Keys.SCORE_ADJUSTED],
   params: { alpha: { type: "number", min: 0, max: 1, default: 0.5 } },
-  budget: { max_ms_per_1k: 5, max_set_per_obj: 10 }
+  budget: { max_ms_per_1k: 5, max_set_per_obj: 10, max_write_bytes: 1048576, max_write_cells: 100000 }
 };
 
+// Row-level API: return modified Obj array
 export function runBatch(objs, ctx, params) {
   return objs.map(obj =>
     obj.set(Keys.SCORE_ADJUSTED, obj.get(Keys.SCORE_BASE) * params.alpha)
@@ -147,13 +187,205 @@ export function runBatch(objs, ctx, params) {
 }
 ```
 
-### 5. Clarifications Locked Down
+**njs Module Contract (Column-Level):**
+```js
+export const meta = {
+  name: "column_example",
+  version: "1.0.0",
+  reads:  [Keys.SCORE_BASE, Keys.FEAT_EMBEDDING],
+  writes: [Keys.SCORE_ADJUSTED],
+  budget: { max_write_bytes: 1048576, max_write_cells: 100000 }
+};
+
+// Column-level API: use ctx.batch for efficient vectorized operations
+export function runBatch(objs, ctx, params) {
+  const n = ctx.batch.rowCount();
+
+  // Read column as Float32Array (read-only view)
+  const scoreBase = ctx.batch.f32(Keys.SCORE_BASE);  // Float32Array[n]
+
+  // Allocate writable column backed by BatchBuilder
+  const scoreAdj = ctx.batch.writeF32(Keys.SCORE_ADJUSTED);  // Float32Array[n]
+
+  // Vectorized operation
+  for (let i = 0; i < n; i++) {
+    scoreAdj[i] = scoreBase[i] * params.alpha;
+  }
+
+  // Return undefined to signal column writers were used
+  // Engine will call builder.build() to finalize
+  return undefined;
+}
+```
+
+**ctx.batch API:**
+
+| Method | Description |
+|--------|-------------|
+| `rowCount()` | Returns number of rows in batch |
+| `f32(key)` | Read-only `Float32Array` view of f32 column |
+| `f32vec(key)` | Read-only array of `Float32Array` views (for f32vec column, one per row) |
+| `i64(key)` | Read-only `BigInt64Array` view of i64 column |
+| `writeF32(key)` | Allocate writable `Float32Array` backed by BatchBuilder |
+| `writeF32Vec(key, dim)` | Allocate writable f32vec column with given dimension |
+| `writeI64(key)` | Allocate writable `BigInt64Array` backed by BatchBuilder |
+
+**Write Enforcement:**
+- All `write*` methods check `key` against `meta.writes` - throws if not allowed
+- All `write*` methods check key type against registry - throws on type mismatch
+- Budget tracking: `max_write_cells` counts total cells written, `max_write_bytes` counts total bytes
+
+**runBatch Return Semantics:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  runBatch returns Obj[]                                                      │
+│  ─────────────────────                                                       │
+│  → Row-level updates via obj.set()                                           │
+│  → Each returned Obj has its own changes                                     │
+│  → Engine merges changes row by row                                          │
+│                                                                              │
+│  runBatch returns undefined/null                                             │
+│  ───────────────────────────────                                             │
+│  → Column writers (writeF32, etc.) were used                                 │
+│  → Engine calls builder.build() directly to finalize                         │
+│  → More efficient for batch operations (no per-row overhead)                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Budget Enforcement:**
+```
+budget: {
+  max_ms_per_1k: 5,         // Wall-clock time limit per 1000 rows
+  max_set_per_obj: 10,      // Max obj.set() calls per row (row-level API)
+  max_write_bytes: 1048576, // Max bytes allocated via write* APIs (column-level)
+  max_write_cells: 100000   // Max cells (individual values) written via write* APIs
+}
+```
+
+### 5. Columnar Data Model (SoA) with Typed Columns
+
+**Goal:** Keep public semantics (immutable `Obj.set()` returns new Obj) but internally use typed columnar layout for:
+- Cache efficiency
+- Column sharing (COW)
+- **Zero-copy views for njs** (ctx.batch.f32 → Float32Array)
+
+**CRITICAL: Typed Columns, Not vector<Value>**
+
+To support zero/low-copy `Float32Array` views in JS, columns must use typed storage:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  TypedColumn (abstract base)                                                │
+│  ───────────────────────────                                                │
+│  F32Column  { data: vector<float> }        // contiguous f32 storage        │
+│  I64Column  { data: vector<int64_t> }      // contiguous i64 storage        │
+│  BoolColumn { data: vector<bool> }         // bool storage                  │
+│  StrColumn  { data: vector<string> }       // string storage                │
+│  F32VecColumn {                                                             │
+│    data: vector<float>   // contiguous N×D storage (row-major)              │
+│    dim: size_t           // dimension per row                               │
+│  }                                                                          │
+│                                                                             │
+│  ColumnBatch {                                                              │
+│    columns: Map<KeyId, shared_ptr<TypedColumn>>  // shared for COW         │
+│    row_count: size_t                                                        │
+│                                                                             │
+│    // Typed accessors (fast path)                                           │
+│    GetF32Column(key_id) → F32Column*                                        │
+│    GetI64Column(key_id) → I64Column*                                        │
+│    GetF32VecColumn(key_id) → F32VecColumn*                                  │
+│                                                                             │
+│    // Generic accessor (slower, for RowView)                                │
+│    GetValue(row_index, key_id) → Value                                      │
+│  }                                                                          │
+│                                                                             │
+│  RowView {                                                                  │
+│    batch: const ColumnBatch*                                                │
+│    builder: BatchBuilder*   // null for read-only views                     │
+│    row_index: size_t                                                        │
+│                                                                             │
+│    get(key_id) → Value      // reads via typed column                       │
+│    set(key_id, val) → RowView  // writes via builder (COW)                  │
+│  }                                                                          │
+│                                                                             │
+│  BatchBuilder {                                                             │
+│    source: const ColumnBatch*                                               │
+│    modified: Map<KeyId, shared_ptr<TypedColumn>>                            │
+│                                                                             │
+│    build() → ColumnBatch:                                                   │
+│      result.columns = source.columns  // share unmodified                   │
+│      for (key, col) in modified:                                            │
+│        result.columns[key] = col      // own modified                       │
+│      return result                                                          │
+│  }                                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**f32vec Storage: Contiguous N×D**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CORRECT: F32VecColumn (contiguous)                                          │
+│  ─────────────────────────────────                                           │
+│  data: [r0d0, r0d1, r0d2, r1d0, r1d1, r1d2, r2d0, r2d1, r2d2]  // N=3, D=3  │
+│  dim: 3                                                                      │
+│                                                                              │
+│  ctx.batch.f32vec(key) → { data: Float32Array, dim: 3 }                      │
+│  Access row i: data.subarray(i * dim, (i + 1) * dim)                         │
+│                                                                              │
+│  WRONG: Per-row vectors                                                      │
+│  ─────────────────────                                                       │
+│  data: [Float32Array[3], Float32Array[3], Float32Array[3]]  // N pointers!   │
+│  ✗ No zero-copy view possible, requires N allocations                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Zero-Copy JS Integration:**
+
+```cpp
+// C++ side: expose raw pointer to QuickJS
+F32Column* col = batch.GetF32Column(key_id);
+float* data = col->Data();  // contiguous
+size_t size = col->Size();
+
+// QuickJS side: wrap as Float32Array (no copy)
+JSValue arr = JS_NewFloat32Array(ctx, data, size);  // view, not copy
+```
+
+**Invariants:**
+- `RowView.set()` returns a new `RowView` (same batch, same row_index, writes via builder)
+- Original `ColumnBatch` is never mutated
+- `BatchBuilder.build()` produces a new `ColumnBatch` that shares unchanged columns
+- Core nodes can operate directly on typed columns (vectorized reads/writes)
+- njs ctx.batch APIs expose raw typed arrays (zero-copy when possible)
+
+**Column Sharing Example:**
+```
+Input batch: { columns: { K1: F32Column[a,b,c], K2: I64Column[x,y,z] } }
+
+score_formula writes K3 (new F32 column):
+  Output batch: { K1: shared, K2: shared, K3: F32Column[p,q,r] }
+  Memory: K1 and K2 are NOT copied.
+
+njs node writes K2[1] via ctx.batch.writeI64:
+  Output batch: { K1: shared, K2: I64Column[x,Y,z], K3: shared }
+  Memory: K2 is copied (COW), K1 and K3 are shared.
+```
+
+**Benefits:**
+- Cache-efficient typed columnar layout
+- Zero-copy `Float32Array` views for njs
+- Minimal memory allocation when adding new columns
+- Unchanged columns shared across pipeline stages
+- Vectorized SIMD operations possible for core nodes
+
+### 6. Clarifications Locked Down
 
 | Topic | Decision |
 |-------|----------|
 | **Registry source of truth** | `keys/registry.yaml` → generates `keys.json`, `keys.ts`, `keys.h`. C++ engine loads `keys.json` at runtime for validation. `keys.h` is optional convenience for compile-time constants in core nodes. |
 | **Penalty semantics** | MVP: `penalty("name")` reads from a designated penalty key in registry (e.g., `penalty.{name}`). If key missing or value is null, return 0.0. |
-| **Obj implementation** | MVP uses copying `std::unordered_map`. Immutability is semantic (set returns new Obj). Structural sharing is a future optimization. |
+| **Obj implementation** | `RowView` over `(ColumnBatch, rowIndex)`. Immutability via `BatchBuilder` COW semantics. |
 | **Division** | `/` rejected in translator with `E_EXPR_DISALLOWED_SYNTAX`. `div` op reserved in schema but not implemented in eval. |
 
 ---
@@ -236,10 +468,16 @@ ranking-dsl/
 │   │   │   ├── registry.h    # Key registry runtime (loads keys.json)
 │   │   │   └── registry.cpp
 │   │   ├── object/
-│   │   │   ├── obj.h         # Immutable Obj type
-│   │   │   ├── obj.cpp
 │   │   │   ├── value.h       # Value variant type
-│   │   │   └── candidate_batch.h
+│   │   │   ├── value.cpp
+│   │   │   ├── typed_column.h   # TypedColumn base + F32Column, I64Column, F32VecColumn
+│   │   │   ├── typed_column.cpp
+│   │   │   ├── column_batch.h   # ColumnBatch with shared_ptr<TypedColumn>
+│   │   │   ├── column_batch.cpp
+│   │   │   ├── batch_builder.h  # COW BatchBuilder
+│   │   │   ├── batch_builder.cpp
+│   │   │   ├── row_view.h       # RowView over (batch, rowIndex)
+│   │   │   └── row_view.cpp
 │   │   ├── expr/
 │   │   │   ├── expr.h        # Expr IR evaluation
 │   │   │   ├── expr.cpp
@@ -260,6 +498,8 @@ ranking-dsl/
 │   │   │   └── js/
 │   │   │       ├── njs_runner.h
 │   │   │       ├── njs_runner.cpp    # Load + execute njs modules
+│   │   │       ├── batch_context.h   # BatchContext with zero-copy APIs
+│   │   │       ├── batch_context.cpp
 │   │   │       └── njs_sandbox.cpp   # JS runtime with budget enforcement
 │   │   ├── executor/
 │   │   │   ├── executor.h
@@ -271,9 +511,11 @@ ranking-dsl/
 │   │   ├── test_main.cpp
 │   │   ├── plan_compiler_test.cpp
 │   │   ├── expr_eval_test.cpp
-│   │   ├── obj_test.cpp
+│   │   ├── column_batch_test.cpp     # TypedColumn, ColumnBatch, COW sharing
+│   │   ├── row_view_test.cpp         # RowView get/set, type enforcement
+│   │   ├── columnar_eval_test.cpp    # Expression eval on typed columns
 │   │   ├── key_enforcement_test.cpp
-│   │   ├── njs_runner_test.cpp       # njs load, writes enforcement, budget
+│   │   ├── njs_runner_test.cpp       # BatchContext APIs, writes/budget enforcement
 │   │   └── e2e_pipeline_test.cpp
 │   └── third_party/
 │       └── (fmt, nlohmann_json, catch2, quickjs or v8)
@@ -289,28 +531,94 @@ ranking-dsl/
 
 ## Implementation Phases
 
-### Phase 1: Foundation
+### Phase 1: Foundation ✅ COMPLETED
 
 **1.1 Project Setup**
-- [ ] Initialize npm workspace with TypeScript
-- [ ] Configure Vitest
-- [ ] Set up C++ project with CMake
-- [ ] Add dependencies: `fmt`, `nlohmann/json`, Catch2
-- [ ] Create shared TypeScript types (`tools/shared/`)
+- [x] Initialize npm workspace with TypeScript
+- [x] Configure Vitest
+- [x] Set up C++ project with CMake
+- [x] Add dependencies: `fmt`, `nlohmann/json`, Catch2
+- [x] Create shared TypeScript types (`tools/shared/`)
 
 **1.2 Key Registry**
-- [ ] Define registry.yaml schema (Zod)
-- [ ] Implement YAML parser with validation (`tools/codegen/src/parser.ts`)
-- [ ] Implement TypeScript generator (`keys.ts`)
-- [ ] Implement C++ header generator (`keys.h`)
-- [ ] Implement JSON generator (`keys.json`)
-- [ ] Create example `keys/registry.yaml` with spec keys (including penalty keys)
-- [ ] Write tests for codegen
+- [x] Define registry.yaml schema (Zod)
+- [x] Implement YAML parser with validation (`tools/codegen/src/parser.ts`)
+- [x] Implement TypeScript generator (`keys.ts`)
+- [x] Implement C++ header generator (`keys.h`)
+- [x] Implement JSON generator (`keys.json`)
+- [x] Create example `keys/registry.yaml` with spec keys (including penalty keys)
+- [x] Write tests for codegen
 
 **1.3 Expr IR Types**
-- [ ] Define Expr IR TypeScript types (`tools/shared/src/expr-ir.ts`)
-- [ ] Implement `dsl.F` builder API
-- [ ] Write tests for Expr IR builder
+- [x] Define Expr IR TypeScript types (`tools/shared/src/expr-ir.ts`)
+- [x] Implement `dsl.F` builder API
+- [x] Write tests for Expr IR builder
+
+**1.4 C++ Engine Foundation**
+- [x] Implement `Value` variant type
+- [x] Implement `Obj` (copying map - pre-columnar)
+- [x] Implement `KeyRegistry` (loads keys.json)
+- [x] Implement Expr IR evaluation (const, signal, add, mul, min, max, clamp, cos, penalty)
+- [x] Implement Plan parsing and compilation
+- [x] Implement core node runners (sourcer, merge, features, model, score_formula)
+- [x] Implement executor with tracing
+- [x] Write C++ tests (11 tests passing)
+
+---
+
+### Phase 1.5: Columnar Data Model Refactor ✅ COMPLETED
+
+**Goal:** Refactor internal data model from row-oriented (`vector<Obj>`) to column-oriented (`ColumnBatch`) while preserving public API semantics.
+
+**1.5.1 Typed Columns and ColumnBatch**
+- [x] Implement `TypedColumn` abstract base with typed storage (`F32Column`, `I64Column`, `F32VecColumn`, etc.)
+- [x] Implement `ColumnBatch` with `Map<KeyId, shared_ptr<TypedColumn>>`
+- [x] Add typed accessors: `GetF32Column()`, `GetI64Column()`, `GetF32VecColumn()`
+- [x] Implement `F32VecColumn` with contiguous N×D storage (row-major)
+- [x] Write unit tests for TypedColumn operations and ColumnBatch
+
+**1.5.2 BatchBuilder (COW Semantics)**
+- [x] Implement `BatchBuilder` that wraps a source `ColumnBatch`
+- [x] Implement `Set(row_index, key_id, value)` with copy-on-write
+- [x] Implement `Build()` → new `ColumnBatch` sharing unmodified columns
+- [x] Write unit tests for COW behavior (verify sharing via `use_count()`)
+
+**1.5.3 RowView (Refactored Obj)**
+- [x] Implement `RowView` over `(ColumnBatch*, row_index)`
+- [x] `Get(key_id)` reads from typed column
+- [x] `Set(key_id, val)` writes via `BatchBuilder`, returns new `RowView`
+- [x] Type enforcement via `KeyRegistry`
+- [x] Write unit tests for RowView get/set semantics
+
+**1.5.4 Update Core Nodes**
+- [x] Update `NodeRunner` interface to operate on `ColumnBatch` input/output
+- [x] `core:sourcer` - create initial `ColumnBatch` with typed columns
+- [x] `core:merge` - merge batches using typed columns
+- [x] `core:features` - add feature columns (including `F32VecColumn` for embeddings)
+- [x] `core:model` - add score column using typed accessors
+- [x] `core:score_formula` - evaluate expr on typed columns, write output column
+
+**1.5.5 Update Executor**
+- [x] Executor passes `ColumnBatch` between nodes
+- [x] Tracing reports column counts and row counts
+- [x] Integration tests pass with columnar batches
+
+**1.5.6 BatchContext Zero-Copy APIs (for njs)**
+- [x] `GetF32Raw(key_id)` → `pair<const float*, size_t>` (zero-copy read)
+- [x] `GetF32VecRaw(key_id)` → `F32VecView{data, data_size, dim, row_count}` (contiguous N×D)
+- [x] `GetI64Raw(key_id)` → `pair<const int64_t*, size_t>` (zero-copy read)
+- [x] `AllocateF32(key_id)` → `float*` (direct write access)
+- [x] `AllocateF32Vec(key_id, dim)` → `float*` (contiguous N×D write)
+- [x] `AllocateI64(key_id)` → `int64_t*` (direct write access)
+- [x] `meta.writes` enforcement on all Allocate* calls
+- [x] Budget enforcement (`max_write_bytes`, `max_write_cells`)
+- [x] Type mismatch enforcement via KeyRegistry
+
+**1.5.7 Tests (24 tests passing)**
+- [x] `column_batch_test.cpp`: TypedColumn operations, ColumnBatch, COW semantics
+- [x] `row_view_test.cpp`: RowView read/write, type enforcement
+- [x] `columnar_eval_test.cpp`: Expression evaluation on typed columns
+- [x] `njs_runner_test.cpp`: BatchContext read/write APIs, enforcement, budget limits
 
 ---
 
@@ -376,69 +684,21 @@ ranking-dsl/
 
 ---
 
-### Phase 3: C++ Engine
+### Phase 3: C++ Engine (njs Runner)
 
-**3.1 Core Data Structures**
-- [ ] Implement `Value` variant type (null, bool, i64, f32, string, bytes, f32vec)
-- [ ] Implement `KeyRegistry` (load from `keys.json`)
-- [ ] Implement `Obj` (immutable KV map via copy; semantic immutability)
-- [ ] Implement `CandidateBatch` (vector of Obj)
-- [ ] Write tests for Obj (get/set/has/del, immutability, type enforcement)
+> **Note:** Core data structures, expr eval, plan compiler, core nodes, executor, and key enforcement were completed in Phase 1.4. Only njs runner remains.
 
-**3.2 Expr IR Evaluation**
-- [ ] Implement `ExprNode` variant or polymorphic type
-- [ ] Implement `eval(expr, obj) -> Value`
-- [ ] Implement ops: `const`, `signal`, `add`, `mul`, `min`, `max`, `clamp`
-- [ ] Implement `penalty`: lookup `penalty.{name}` key, return value or 0.0
-- [ ] Implement `cos` (cosine similarity):
-  - Inputs must be f32vec
-  - Return 0.0 if missing or zero norm
-  - Clamp result to [-1, 1]
-- [ ] Type checking during eval
-- [ ] Write comprehensive tests
-
-**3.3 Plan Compiler (C++ side)**
-- [ ] Parse plan JSON (`nlohmann/json`)
-- [ ] Validate plan version
-- [ ] Validate unique node ids
-- [ ] Topological sort (detect cycles)
-- [ ] Resolve ops to node runners (core: or js:)
-- [ ] Validate params schema
-- [ ] Validate key_ids against registry
-- [ ] Write tests
-
-**3.4 Core Node Runners**
-- [ ] Define `NodeRunner` interface
-- [ ] Implement core node registry
-- [ ] Implement `core:sourcer` (stub: generate fake candidates with cand.candidate_id, score.base)
-- [ ] Implement `core:merge` (dedup by max_base or first)
-- [ ] Implement `core:features` (stub: populate feature keys)
-- [ ] Implement `core:model` (stub: write score.ml)
-- [ ] Implement `core:score_formula` (evaluate Expr IR, write output key)
-- [ ] Write tests for each node
-
-**3.5 njs Runner (MVP)**
+**3.1 njs Runner (MVP)**
 - [ ] Embed JS runtime (QuickJS recommended for simplicity, or V8)
 - [ ] Load `.njs` module from path
 - [ ] Parse `meta` object, validate schema
-- [ ] Create sandboxed JS context with `Obj` bindings (get/set/has/del)
+- [ ] Create sandboxed JS context with `RowView` bindings (get/set/has/del)
 - [ ] **Enforce `meta.writes`**: intercept `obj.set()`, reject if key not in writes
 - [ ] **Enforce budget**: step limit (QuickJS interrupt) or wall-clock timeout
 - [ ] Call `runBatch(objs, ctx, params)` or fallback to `run(obj, ctx, params)`
-- [ ] Return modified Objs to pipeline
+  - Each `obj` is a `RowView` - writes go through BatchBuilder
+- [ ] Return modified batch to pipeline
 - [ ] Write tests: load module, writes enforcement, budget exceeded
-
-**3.6 Executor**
-- [ ] Implement `execute(compiled_plan, request_ctx)`
-- [ ] Run nodes in topological order
-- [ ] Per-node span start/end
-- [ ] Emit structured JSON logs (node_start, node_end, duration_ms, rows_in/out)
-- [ ] Sample dumps for top-N (whitelisted keys only)
-- [ ] Write tests
-
-**3.7 Key Enforcement**
-- [ ] `obj.set(key, value)` validates type matches `key.type` from registry
-- [ ] Write tests for type mismatch rejection
 
 ---
 
@@ -526,12 +786,13 @@ ranking-dsl/
 - **Branching scenarios** for spanId binding (if/else in plan.js)
 
 ### C++ (Catch2)
-- `obj_test.cpp`: Obj immutability, get/set/has, type enforcement
+- `column_batch_test.cpp`: Column creation, ColumnBatch construction, column sharing verification
+- `row_view_test.cpp`: RowView get/set, immutability semantics, type enforcement
 - `expr_eval_test.cpp`: Each op, type errors, edge cases, cos normalization
 - `plan_compiler_test.cpp`: Validation, cycle detection, key validation
 - `key_enforcement_test.cpp`: Type mismatch rejection
 - `njs_runner_test.cpp`: Module load, meta validation, writes enforcement, budget limits
-- `e2e_pipeline_test.cpp`: Full pipeline with core + njs nodes
+- `e2e_pipeline_test.cpp`: Full pipeline with core + njs nodes, columnar batches
 
 ---
 

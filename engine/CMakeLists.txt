@@ -50,6 +50,11 @@ add_library(ranking_dsl_engine
   src/keys/registry.cpp
   src/object/value.cpp
   src/object/obj.cpp
+  src/object/column.cpp
+  src/object/typed_column.cpp
+  src/object/column_batch.cpp
+  src/object/batch_builder.cpp
+  src/object/row_view.cpp
   src/expr/expr.cpp
   src/plan/plan.cpp
   src/plan/compiler.cpp
@@ -59,6 +64,8 @@ add_library(ranking_dsl_engine
   src/nodes/core/features.cpp
   src/nodes/core/model.cpp
   src/nodes/core/score_formula.cpp
+  src/nodes/js/batch_context.cpp
+  src/nodes/js/njs_runner.cpp
   src/executor/executor.cpp
   src/logging/trace.cpp
 )
@@ -91,6 +98,10 @@ if(RANKING_DSL_BUILD_TESTS)
     tests/expr_eval_test.cpp
     tests/plan_compiler_test.cpp
     tests/key_enforcement_test.cpp
+    tests/column_batch_test.cpp
+    tests/row_view_test.cpp
+    tests/columnar_eval_test.cpp
+    tests/njs_runner_test.cpp
   )
 
   target_link_libraries(ranking_dsl_tests
