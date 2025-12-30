@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validateTraceKey,
   TRACE_KEY_PATTERN,
-} from '../types';
+} from '../types.js';
 
 describe('validateTraceKey', () => {
   describe('valid trace keys', () => {
