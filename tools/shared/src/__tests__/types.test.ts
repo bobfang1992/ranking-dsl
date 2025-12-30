@@ -46,14 +46,15 @@ describe('validateTraceKey', () => {
       const key64 = 'a'.repeat(64);
       expect(validateTraceKey(key64)).toBeNull();
     });
+
+    it('accepts empty string (means "not set")', () => {
+      // Empty string is valid - it means trace_key is not set
+      // This matches C++ behavior in ValidateTraceKey
+      expect(validateTraceKey('')).toBeNull();
+    });
   });
 
   describe('invalid trace keys', () => {
-    it('rejects empty string', () => {
-      const error = validateTraceKey('');
-      expect(error).toBe('trace_key must not be empty');
-    });
-
     it('rejects keys exceeding 64 characters', () => {
       const key65 = 'a'.repeat(65);
       const error = validateTraceKey(key65);
