@@ -16,7 +16,7 @@ An embedded DSL for building ranking pipelines, with TypeScript tooling and a C+
 | Phase 1 | Complete | Project setup, key registry, Expr IR, core nodes |
 | Phase 1.5 | Complete | Columnar data model (TypedColumn, ColumnBatch, COW), BatchContext APIs |
 | Phase 2 | **Not Implemented** | JS expr sugar (`dsl.expr()`), AST gate, spanId injection |
-| Phase 3 | In Progress | njs runner with QuickJS (MVP complete) |
+| Phase 3 | Complete | njs runner with QuickJS, column-level APIs, budget enforcement |
 
 **Note:** The JS expression sugar syntax (`dsl.expr(() => ...)`) and AST rewriting with spanId injection are Phase 2 features and are **not yet implemented**. Use the builder-based `dsl.F.*` API for expressions.
 
@@ -50,7 +50,8 @@ ranking-dsl/
 │   └── generated/             # Generated key constants
 │       ├── keys.ts            # TypeScript
 │       ├── keys.h             # C++
-│       └── keys.json          # Runtime (for engine)
+│       ├── keys.json          # Runtime (for engine)
+│       └── keys.njs           # CommonJS (for njs modules)
 ├── tools/
 │   ├── shared/                # Common types, Expr IR
 │   ├── codegen/               # Registry → generated files
@@ -75,14 +76,20 @@ ranking-dsl/
 ## CLI Commands
 
 ```bash
-# Generate keys.ts, keys.h, keys.json from registry.yaml
-rankdsl codegen
+# Generate keys.ts, keys.h, keys.json, keys.njs from registry.yaml
+npm run codegen
 
 # Check if generated files are up to date (for CI)
-rankdsl codegen --check
+node tools/cli/dist/index.js codegen --check
 
 # Run the engine on a compiled plan
-./engine/build/rankdsl_engine plan.json --dump-top 20
+./build-rel/engine/rankdsl_engine plan.json [OPTIONS]
+
+# Engine options:
+#   -k, --keys <file>     Path to keys.json (uses compiled-in keys if not specified)
+#   -n, --dump-top <N>    Number of top results to display
+#   -q, --quiet           Suppress output except errors
+#   -h, --help            Print help message
 ```
 
 ## Key Registry
@@ -149,6 +156,49 @@ p = p.score(
 | `core:features` | Populate feature keys |
 | `core:model` | Run ML model, write score |
 | `core:score_formula` | Evaluate expression, write result |
+| `njs` | Execute JavaScript module (QuickJS) |
+
+## njs Modules
+
+Custom ranking logic can be implemented in JavaScript using `.njs` modules:
+
+```javascript
+// example.njs - Uses Keys.* identifiers (injected globally)
+exports.meta = {
+  name: "example",
+  version: "1.0.0",
+  reads: [Keys.SCORE_BASE],
+  writes: [Keys.SCORE_ML],
+  budget: {
+    max_write_bytes: 1048576,
+    max_write_cells: 100000
+  }
+};
+
+exports.runBatch = function(objs, ctx, params) {
+  var n = ctx.batch.rowCount();
+  var baseScores = ctx.batch.f32(Keys.SCORE_BASE);  // Read column
+  var mlScores = ctx.batch.writeF32(Keys.SCORE_ML); // Write column
+
+  for (var i = 0; i < n; i++) {
+    mlScores[i] = baseScores[i] * params.alpha;
+  }
+  return undefined;  // Signal column writes used
+};
+```
+
+**ctx.batch API:**
+| Method | Description |
+|--------|-------------|
+| `rowCount()` | Number of rows in batch |
+| `f32(key)` | Read f32 column as array |
+| `i64(key)` | Read i64 column as array |
+| `writeF32(key)` | Allocate writable f32 column |
+| `writeI64(key)` | Allocate writable i64 column |
+
+**Enforcement:**
+- `meta.writes` - Only listed keys can be written
+- `meta.budget` - `max_write_cells` and `max_write_bytes` limits enforced
 
 ## Development
 
@@ -158,11 +208,10 @@ npm run build          # Build all packages
 npm test               # Run Vitest tests
 npm run typecheck      # Type check without emitting
 
-# C++
-cd engine/build
-make                   # Incremental build
-ctest                  # Run tests
-ctest -V               # Verbose test output
+# C++ (from repo root)
+cmake --build build-rel -j           # Incremental build
+ctest --test-dir build-rel           # Run tests
+ctest --test-dir build-rel -V        # Verbose test output
 ```
 
 ## Architecture
