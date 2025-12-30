@@ -15,7 +15,7 @@ static Plan CreateLinearPlan(int n) {
   plan.version = 1;
 
   for (int i = 0; i < n; ++i) {
-    NodeSpec node;
+    PlanNode node;
     node.id = "n" + std::to_string(i);
     node.op = "core:features";
     if (i > 0) {
@@ -34,14 +34,14 @@ static Plan CreateFanoutPlan(int fanout) {
   plan.version = 1;
 
   // Root node
-  NodeSpec root;
+  PlanNode root;
   root.id = "root";
   root.op = "core:sourcer";
   plan.nodes.push_back(root);
 
   // Fan-out nodes
   for (int i = 0; i < fanout; ++i) {
-    NodeSpec node;
+    PlanNode node;
     node.id = "child" + std::to_string(i);
     node.op = "core:features";
     node.inputs = {"root"};
@@ -59,14 +59,14 @@ static Plan CreateFaninPlan(int fanin) {
 
   // Fan-in sources
   for (int i = 0; i < fanin; ++i) {
-    NodeSpec node;
+    PlanNode node;
     node.id = "src" + std::to_string(i);
     node.op = "core:sourcer";
     plan.nodes.push_back(node);
   }
 
   // Merger node
-  NodeSpec merger;
+  PlanNode merger;
   merger.id = "merger";
   merger.op = "core:merge";
   for (int i = 0; i < fanin; ++i) {
@@ -91,7 +91,7 @@ TEST_CASE("Complexity metrics computation", "[complexity][metrics]") {
 
   SECTION("Single node plan") {
     Plan plan;
-    NodeSpec node;
+    PlanNode node;
     node.id = "n1";
     node.op = "core:sourcer";
     plan.nodes.push_back(node);
@@ -426,14 +426,14 @@ TEST_CASE("Cross-check fixture plan metrics", "[complexity][cross-check]") {
 
   // sourcer
   {
-    NodeSpec node;
+    PlanNode node;
     node.id = "sourcer";
     node.op = "core:sourcer";
     plan.nodes.push_back(node);
   }
   // feat1, feat2, feat3 (all depend on sourcer)
   for (int i = 1; i <= 3; ++i) {
-    NodeSpec node;
+    PlanNode node;
     node.id = "feat" + std::to_string(i);
     node.op = "core:features";
     node.inputs = {"sourcer"};
@@ -441,7 +441,7 @@ TEST_CASE("Cross-check fixture plan metrics", "[complexity][cross-check]") {
   }
   // model1 (depends on feat1)
   {
-    NodeSpec node;
+    PlanNode node;
     node.id = "model1";
     node.op = "core:model";
     node.inputs = {"feat1"};
@@ -449,7 +449,7 @@ TEST_CASE("Cross-check fixture plan metrics", "[complexity][cross-check]") {
   }
   // model2 (depends on feat2)
   {
-    NodeSpec node;
+    PlanNode node;
     node.id = "model2";
     node.op = "core:model";
     node.inputs = {"feat2"};
@@ -457,7 +457,7 @@ TEST_CASE("Cross-check fixture plan metrics", "[complexity][cross-check]") {
   }
   // merge (depends on model1, model2, feat3)
   {
-    NodeSpec node;
+    PlanNode node;
     node.id = "merge";
     node.op = "core:merge";
     node.inputs = {"model1", "model2", "feat3"};
@@ -465,7 +465,7 @@ TEST_CASE("Cross-check fixture plan metrics", "[complexity][cross-check]") {
   }
   // final (depends on merge)
   {
-    NodeSpec node;
+    PlanNode node;
     node.id = "final";
     node.op = "core:score_formula";
     node.inputs = {"merge"};
