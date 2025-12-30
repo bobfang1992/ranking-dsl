@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 
+#include <CLI/CLI.hpp>
 #include <fmt/format.h>
 
 #include "executor/executor.h"
@@ -12,43 +13,27 @@
 
 using namespace ranking_dsl;
 
-void PrintUsage(const char* prog) {
-  fmt::print("Usage: {} <plan.json> [--keys <keys.json>] [--dump-top N] [--quiet]\n", prog);
-}
-
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    PrintUsage(argv[0]);
-    return 1;
-  }
+  CLI::App app{"Ranking DSL Engine - Execute compiled ranking plans"};
 
   std::string plan_path;
   std::string keys_path;
   int dump_top = 0;
   bool quiet = false;
 
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    if (arg == "--keys" && i + 1 < argc) {
-      keys_path = argv[++i];
-    } else if (arg == "--dump-top" && i + 1 < argc) {
-      dump_top = std::stoi(argv[++i]);
-    } else if (arg == "--quiet") {
-      quiet = true;
-    } else if (arg[0] != '-') {
-      plan_path = arg;
-    } else {
-      fmt::print(stderr, "Unknown option: {}\n", arg);
-      PrintUsage(argv[0]);
-      return 1;
-    }
-  }
+  app.add_option("plan", plan_path, "Path to compiled plan.json")
+      ->required()
+      ->check(CLI::ExistingFile);
 
-  if (plan_path.empty()) {
-    fmt::print(stderr, "Error: plan path required\n");
-    PrintUsage(argv[0]);
-    return 1;
-  }
+  app.add_option("--keys,-k", keys_path, "Path to keys.json (uses compiled-in keys if not specified)")
+      ->check(CLI::ExistingFile);
+
+  app.add_option("--dump-top,-n", dump_top, "Number of top results to display")
+      ->check(CLI::NonNegativeNumber);
+
+  app.add_flag("--quiet,-q", quiet, "Suppress output except errors");
+
+  CLI11_PARSE(app, argc, argv);
 
   // Set tracing based on quiet flag
   Tracer::SetEnabled(!quiet);

@@ -55,7 +55,8 @@ gh pr create --fill
 | Internal data model | **Columnar (SoA)**: Typed columns (`F32Column`, `I64Column`, `F32VecColumn`) |
 | f32vec storage | **Contiguous N×D** with dimension metadata, NOT per-row vectors |
 | njs JS runtime | **QuickJS** (simpler step limits, smaller footprint) |
-| Builder finalize method | **`build()`** everywhere (not `finish()`)
+| Builder finalize method | **`build()`** everywhere (not `finish()`) |
+| C++ CLI argument parsing | **CLI11** (header-only, modern C++, clean API) |
 
 ---
 
@@ -706,31 +707,35 @@ ranking-dsl/
 
 ---
 
-### Phase 3: C++ Engine (njs Runner)
+### Phase 3: C++ Engine (njs Runner) ✅ COMPLETED
 
-> **Note:** Core data structures, expr eval, plan compiler, core nodes, executor, and key enforcement were completed in Phase 1.4. Only njs runner remains.
+> **Note:** Core data structures, expr eval, plan compiler, core nodes, executor, and key enforcement were completed in Phase 1.4.
 
 **3.1 njs Runner (MVP)**
-- [ ] Embed JS runtime (QuickJS recommended for simplicity, or V8)
-- [ ] Load `.njs` module from path
-- [ ] Parse `meta` object, validate schema
-- [ ] Create sandboxed JS context with `RowView` bindings (get/set/has/del)
-- [ ] **Enforce `meta.writes`**: intercept `obj.set()`, reject if key not in writes
-- [ ] **Enforce budget**: step limit (QuickJS interrupt) or wall-clock timeout
-- [ ] Call `runBatch(objs, ctx, params)` or fallback to `run(obj, ctx, params)`
-  - Each `obj` is a `RowView` - writes go through BatchBuilder
-- [ ] Return modified batch to pipeline
-- [ ] Write tests: load module, writes enforcement, budget exceeded
+- [x] Embed JS runtime (QuickJS)
+- [x] Load `.njs` module from path
+- [x] Parse `meta` object, validate schema
+- [x] Inject `Keys` and `KeyInfo` globals from KeyRegistry
+- [x] Create ctx.batch API with column-level methods (rowCount, f32, i64, writeF32, writeI64)
+- [x] **Enforce `meta.writes`**: writeF32/writeI64 reject if key not in writes
+- [x] **Enforce budget**: instruction counting via QuickJS interrupt, max_write_cells/bytes
+- [x] Call `runBatch(objs, ctx, params)` with column-level API support
+- [x] Return modified batch to pipeline
+- [x] Write tests: load module, writes enforcement, budget exceeded
+- [x] keys.njs codegen for stable key identifiers in njs modules
+- [x] Improved error messages with key names (e.g., "key 3003 (score.adjusted)")
+
+> **Note:** Row-level API (obj.get/set returning Obj[]) is not yet implemented. Column-level API via ctx.batch is the recommended approach.
 
 ---
 
 ### Phase 4: CLI & Integration
 
 **4.1 CLI**
-- [ ] Implement `rankdsl codegen` (regenerate keys.* from registry.yaml)
+- [x] Implement `rankdsl codegen` (regenerate keys.ts, keys.h, keys.json, keys.njs from registry.yaml)
 - [ ] Implement `rankdsl validate <plan.js>` (static gate only)
 - [ ] Implement `rankdsl plan --in <file> --out <file> --config <file>`
-- [ ] Implement `rankdsl run --plan <plan.json> --dump-top N` (invokes engine)
+- [x] C++ engine CLI with CLI11 (plan.json, --keys, --dump-top, --quiet)
 - [ ] Write CLI tests
 
 **4.2 End-to-End Test**

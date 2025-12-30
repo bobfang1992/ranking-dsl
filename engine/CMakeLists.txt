@@ -45,6 +45,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# CLI11 for argument parsing
+FetchContent_Declare(
+  cli11
+  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+  GIT_TAG v2.4.2
+)
+FetchContent_MakeAvailable(cli11)
+
 # Catch2 for testing
 if(RANKING_DSL_BUILD_TESTS)
   FetchContent_Declare(
@@ -140,7 +148,7 @@ target_link_libraries(ranking_dsl_engine
 
 # Main executable
 add_executable(rankdsl_engine src/main.cpp)
-target_link_libraries(rankdsl_engine PRIVATE ranking_dsl_engine)
+target_link_libraries(rankdsl_engine PRIVATE ranking_dsl_engine CLI11::CLI11)
 
 # Tests
 if(RANKING_DSL_BUILD_TESTS)
