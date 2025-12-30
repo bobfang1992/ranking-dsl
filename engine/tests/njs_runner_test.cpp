@@ -486,3 +486,283 @@ TEST_CASE("QuickJS execution - budget exceeded fails", "[njs][quickjs][budget]")
       runner.Run(exec_ctx, batch, params),
       Catch::Matchers::ContainsSubstring("max_write_cells"));
 }
+
+// ============================================================================
+// NjsPolicy Tests
+// ============================================================================
+
+TEST_CASE("NjsPolicy parsing", "[njs][policy]") {
+  NjsPolicy policy;
+
+  SECTION("Load from JSON string") {
+    std::string json = R"({
+      "csv_assets_dir": "custom/assets",
+      "modules": [
+        {"name": "allowed_module", "version": "1.0.0", "allow_io_csv_read": true},
+        {"name": "partial_module", "allow_io_csv_read": false}
+      ]
+    })";
+
+    std::string error;
+    REQUIRE(policy.LoadFromJson(json, &error));
+    REQUIRE(policy.CsvAssetsDir() == "custom/assets");
+    REQUIRE(policy.IsIoCsvReadAllowed("allowed_module", "1.0.0"));
+    REQUIRE_FALSE(policy.IsIoCsvReadAllowed("partial_module", "1.0.0"));
+    REQUIRE_FALSE(policy.IsIoCsvReadAllowed("unknown_module", "1.0.0"));
+  }
+
+  SECTION("Default deny for unknown modules") {
+    std::string json = R"({"modules": []})";
+    std::string error;
+    REQUIRE(policy.LoadFromJson(json, &error));
+    REQUIRE_FALSE(policy.IsIoCsvReadAllowed("any_module", "1.0.0"));
+  }
+
+  SECTION("Version matching") {
+    std::string json = R"({
+      "modules": [
+        {"name": "versioned", "version": "1.0.0", "allow_io_csv_read": true}
+      ]
+    })";
+    std::string error;
+    REQUIRE(policy.LoadFromJson(json, &error));
+
+    // Exact version match
+    REQUIRE(policy.IsIoCsvReadAllowed("versioned", "1.0.0"));
+
+    // Different version - not allowed
+    REQUIRE_FALSE(policy.IsIoCsvReadAllowed("versioned", "2.0.0"));
+  }
+
+  SECTION("Empty version allows any") {
+    std::string json = R"({
+      "modules": [
+        {"name": "any_version", "version": "", "allow_io_csv_read": true}
+      ]
+    })";
+    std::string error;
+    REQUIRE(policy.LoadFromJson(json, &error));
+
+    REQUIRE(policy.IsIoCsvReadAllowed("any_version", "1.0.0"));
+    REQUIRE(policy.IsIoCsvReadAllowed("any_version", "2.0.0"));
+  }
+}
+
+TEST_CASE("NjsMeta parsing with capabilities", "[njs][meta][capabilities]") {
+  SECTION("Parse IO capabilities") {
+    auto j = nlohmann::json::parse(R"({
+      "name": "io_module",
+      "version": "1.0.0",
+      "reads": [],
+      "writes": [],
+      "capabilities": {
+        "io": {
+          "csv_read": true
+        }
+      },
+      "budget": {
+        "max_io_read_bytes": 2048000,
+        "max_io_read_rows": 5000
+      }
+    })");
+
+    NjsMeta meta = NjsMeta::Parse(j);
+
+    REQUIRE(meta.name == "io_module");
+    REQUIRE(meta.capabilities.io.csv_read == true);
+    REQUIRE(meta.budget.max_io_read_bytes == 2048000);
+    REQUIRE(meta.budget.max_io_read_rows == 5000);
+  }
+
+  SECTION("No capabilities defaults to disabled") {
+    auto j = nlohmann::json::parse(R"({
+      "name": "basic_module",
+      "version": "1.0.0"
+    })");
+
+    NjsMeta meta = NjsMeta::Parse(j);
+
+    REQUIRE(meta.capabilities.io.csv_read == false);
+    REQUIRE(meta.budget.max_io_read_bytes == 0);
+    REQUIRE(meta.budget.max_io_read_rows == 0);
+  }
+}
+
+// ============================================================================
+// Sandbox + IO Capability Acceptance Tests
+// ============================================================================
+
+TEST_CASE("Sandbox: no ctx.io by default", "[njs][sandbox][acceptance]") {
+  // Module does NOT request IO capability
+  // ctx.io should be undefined
+
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  NjsRunner runner;
+  // Note: No policy set - should still work for modules that don't request IO
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "no_io_capability_module.njs";
+
+  // This module checks that ctx.io is undefined and writes dummy values
+  CandidateBatch result = runner.Run(exec_ctx, batch, params);
+
+  REQUIRE(result.RowCount() == 3);
+  REQUIRE(result.HasColumn(keys::id::SCORE_ML));
+
+  auto* ml_col = result.GetF32Column(keys::id::SCORE_ML);
+  REQUIRE(ml_col->Get(0) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("Sandbox: capability requested but policy denies", "[njs][sandbox][acceptance]") {
+  // Module requests IO capability, but policy doesn't allow it
+  // ctx.io should be undefined, module should fail when trying to use it
+
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  // Create policy that denies this module
+  NjsPolicy policy;
+  std::string policy_json = R"({
+    "csv_assets_dir": "engine/tests/testdata/csv",
+    "modules": [
+      {"name": "other_module", "version": "1.0.0", "allow_io_csv_read": true}
+    ]
+  })";
+  policy.LoadFromJson(policy_json);
+
+  NjsRunner runner;
+  runner.SetPolicy(&policy);
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "io_capability_module.njs";
+  params["csv_file"] = "sample.csv";
+
+  // Module requests io.csv_read but policy doesn't allow it
+  // ctx.io will be undefined, module tries to use it and throws "ctx.io not available"
+  REQUIRE_THROWS_WITH(
+      runner.Run(exec_ctx, batch, params),
+      Catch::Matchers::ContainsSubstring("ctx.io not available"));
+}
+
+TEST_CASE("Sandbox: policy allows IO and CSV read works", "[njs][sandbox][acceptance]") {
+  // Module requests IO capability, policy allows it
+  // ctx.io.readCsv should work
+
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  // Create policy that allows this module
+  NjsPolicy policy;
+  std::string policy_json = R"({
+    "csv_assets_dir": "engine/tests/testdata/csv",
+    "modules": [
+      {"name": "io_capability_test", "version": "1.0.0", "allow_io_csv_read": true}
+    ]
+  })";
+  policy.LoadFromJson(policy_json);
+
+  NjsRunner runner;
+  runner.SetPolicy(&policy);
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "io_capability_module.njs";
+  params["csv_file"] = "sample.csv";
+
+  // Module should be able to read CSV and write row count (3) to output
+  CandidateBatch result = runner.Run(exec_ctx, batch, params);
+
+  REQUIRE(result.RowCount() == 3);
+  REQUIRE(result.HasColumn(keys::id::SCORE_ML));
+
+  auto* ml_col = result.GetF32Column(keys::id::SCORE_ML);
+  // The CSV has 3 data rows, so the module writes 3.0 to each output
+  REQUIRE(ml_col->Get(0) == Catch::Approx(3.0f));
+  REQUIRE(ml_col->Get(1) == Catch::Approx(3.0f));
+  REQUIRE(ml_col->Get(2) == Catch::Approx(3.0f));
+}
+
+TEST_CASE("Sandbox: path traversal rejection", "[njs][sandbox][acceptance]") {
+  // Module tries to use path traversal in readCsv - should be rejected
+
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  // Create policy that allows this module
+  NjsPolicy policy;
+  std::string policy_json = R"({
+    "csv_assets_dir": "engine/tests/testdata/csv",
+    "modules": [
+      {"name": "io_traversal_test", "version": "1.0.0", "allow_io_csv_read": true}
+    ]
+  })";
+  policy.LoadFromJson(policy_json);
+
+  NjsRunner runner;
+  runner.SetPolicy(&policy);
+
+  SECTION("Reject .. in path") {
+    nlohmann::json params;
+    params["module"] = GetTestDataDir() + "io_traversal_attack.njs";
+    params["csv_file"] = "../../../etc/passwd";
+
+    REQUIRE_THROWS_WITH(
+        runner.Run(exec_ctx, batch, params),
+        Catch::Matchers::ContainsSubstring("Path traversal not allowed"));
+  }
+
+  SECTION("Reject absolute paths") {
+    nlohmann::json params;
+    params["module"] = GetTestDataDir() + "io_traversal_attack.njs";
+    params["csv_file"] = "/etc/passwd";
+
+    REQUIRE_THROWS_WITH(
+        runner.Run(exec_ctx, batch, params),
+        Catch::Matchers::ContainsSubstring("Absolute paths not allowed"));
+  }
+}
