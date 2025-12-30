@@ -1,6 +1,7 @@
 #include "executor/executor.h"
 
 #include <chrono>
+#include <memory>
 #include <unordered_map>
 
 #include <fmt/format.h>
@@ -60,7 +61,17 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
     // Run node with tracing
     auto start = std::chrono::high_resolution_clock::now();
 
-    Tracer::LogNodeStart(plan.plan.name, node_id, spec->op, spec->trace_key);
+    // Create TraceContext for njs nodes (derive trace_prefix from module path)
+    std::unique_ptr<TraceContext> trace_ctx;
+    if (spec->op == "njs" && spec->params.contains("module")) {
+      std::string module_path = spec->params["module"].get<std::string>();
+      trace_ctx = std::make_unique<TraceContext>();
+      trace_ctx->njs_file = module_path;
+      trace_ctx->trace_prefix = Tracer::DeriveTracePrefix(module_path);
+    }
+
+    Tracer::LogNodeStart(plan.plan.name, node_id, spec->op, spec->trace_key,
+                         trace_ctx.get());
 
     CandidateBatch output = runner->Run(ctx, input, spec->params);
 
@@ -69,7 +80,7 @@ CandidateBatch Executor::Execute(const CompiledPlan& plan, std::string* error_ou
 
     Tracer::LogNodeEnd(plan.plan.name, node_id, spec->op,
                        duration_ms, input.RowCount(), output.RowCount(),
-                       "", spec->trace_key);
+                       "", spec->trace_key, trace_ctx.get());
 
     outputs[node_id] = std::move(output);
   }

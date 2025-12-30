@@ -83,10 +83,12 @@ export const TRACE_KEY_PATTERN = /^[A-Za-z0-9._/-]{1,64}$/;
 /**
  * Validate a trace_key value.
  * Returns null if valid, error message if invalid.
+ * Empty string is valid (means "not set"), matching C++ behavior.
  */
 export function validateTraceKey(traceKey: string): string | null {
+  // Empty string is valid (means "not set")
   if (traceKey.length === 0) {
-    return 'trace_key must not be empty';
+    return null;
   }
   if (traceKey.length > 64) {
     return `trace_key must be at most 64 characters (got ${traceKey.length})`;
