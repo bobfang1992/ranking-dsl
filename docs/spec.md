@@ -42,7 +42,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 1. **No string keys** at runtime: all reads/writes use Key Handles (stable integer ids).
 2. **Two-phase design**: `plan.js` builds Plan only; engine executes.
 3. **Pluggable nodes**: infra engineers implement and register core nodes (C++). JS nodes are allowed via njs modules.
-4. **No IO** in JS: no filesystem, network, process, or dynamic module loading for plan.js or njs at runtime.
+4. **No arbitrary IO** in JS by default: no filesystem, network, process, or dynamic module loading for plan.js or njs at runtime. **Exception:** the engine MAY expose **explicit, policy-gated host IO capabilities** (default OFF) to specific njs modules.
 5. **Governance**: enforce constraints via:
    - plan.js static gate (AST rules + complexity limits),
    - JS sandbox budgets,
@@ -375,6 +375,50 @@ Governance requirements:
 
 - If `runBatch` returns an `Obj[]`, the engine uses row-level updates (RowView path).
 - If `runBatch` returns `undefined`/`null`, the engine assumes column writers were used and commits via `builder.finish()`.
+
+
+
+#### 10.2.2 Sandbox + Optional Host IO Capabilities (DEFAULT OFF)
+
+By default, the njs runtime MUST NOT expose any general-purpose IO:
+
+- no filesystem, network, process, shell, or arbitrary module loading
+- no QuickJS std/os modules (or equivalents) exposed to user code
+
+The engine MAY expose a limited `ctx.io` object ONLY when ALL conditions hold:
+
+1. The module declares the capability in `meta.capabilities.io`.
+2. The engine-side policy allowlists this module for IO capabilities (default deny).
+3. The capability is implemented by the host (engine), not by JS.
+
+Example:
+
+```js
+exports.meta = {
+  name: "my_node",
+  version: "1.0.0",
+  reads: [/* ... */],
+  writes: [/* ... */],
+  capabilities: { io: { csv_read: true } },
+  budget: {
+    max_write_bytes: 1048576,
+    max_write_cells: 100000,
+    max_io_read_bytes: 1048576,
+    max_io_read_rows: 100000
+  }
+};
+```
+
+When enabled, `ctx.io` exposes ONLY host-provided APIs (no raw FS). MVP IO surface:
+
+- `ctx.io.readCsv(resource: string, opts?: object) -> { columns: object, rowCount: number }`
+
+Restrictions (REQUIRED):
+
+- `resource` MUST be resolved by the engine through a controlled resolver (e.g. allowlisted directory or registered asset name).
+- absolute paths and path traversal (`".."`) MUST be rejected.
+- the engine MUST enforce IO budgets (bytes/rows/time) and fail closed.
+- if `ctx.io` is not enabled, it MUST be `undefined` and any attempt to use IO MUST fail.
 
 
 ## 11. Engine: Compile & Execute

@@ -58,9 +58,80 @@ NjsMeta NjsMeta::Parse(const nlohmann::json& j) {
     if (budget.contains("max_set_per_obj")) {
       meta.budget.max_set_per_obj = budget["max_set_per_obj"].get<int64_t>();
     }
+    if (budget.contains("max_io_read_bytes")) {
+      meta.budget.max_io_read_bytes = budget["max_io_read_bytes"].get<int64_t>();
+    }
+    if (budget.contains("max_io_read_rows")) {
+      meta.budget.max_io_read_rows = budget["max_io_read_rows"].get<int64_t>();
+    }
+  }
+
+  // Parse capabilities
+  if (j.contains("capabilities")) {
+    const auto& caps = j["capabilities"];
+    if (caps.contains("io") && caps["io"].is_object()) {
+      const auto& io = caps["io"];
+      if (io.contains("csv_read") && io["csv_read"].is_boolean()) {
+        meta.capabilities.io.csv_read = io["csv_read"].get<bool>();
+      }
+    }
   }
 
   return meta;
+}
+
+// NjsPolicy implementation
+bool NjsPolicy::LoadFromFile(const std::string& path, std::string* error_out) {
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    if (error_out) *error_out = "Failed to open policy file: " + path;
+    return false;
+  }
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  return LoadFromJson(buffer.str(), error_out);
+}
+
+bool NjsPolicy::LoadFromJson(const std::string& json_str, std::string* error_out) {
+  try {
+    auto j = nlohmann::json::parse(json_str);
+
+    if (j.contains("csv_assets_dir")) {
+      csv_assets_dir_ = j["csv_assets_dir"].get<std::string>();
+    }
+
+    if (j.contains("modules") && j["modules"].is_array()) {
+      for (const auto& mod : j["modules"]) {
+        NjsPolicyEntry entry;
+        if (mod.contains("name")) {
+          entry.name = mod["name"].get<std::string>();
+        }
+        if (mod.contains("version")) {
+          entry.version = mod["version"].get<std::string>();
+        }
+        if (mod.contains("allow_io_csv_read")) {
+          entry.allow_io_csv_read = mod["allow_io_csv_read"].get<bool>();
+        }
+        entries_.push_back(entry);
+      }
+    }
+    return true;
+  } catch (const std::exception& e) {
+    if (error_out) *error_out = std::string("JSON parse error: ") + e.what();
+    return false;
+  }
+}
+
+bool NjsPolicy::IsIoCsvReadAllowed(const std::string& name, const std::string& version) const {
+  for (const auto& entry : entries_) {
+    // Match by name, and optionally version (empty version = any)
+    if (entry.name == name) {
+      if (entry.version.empty() || entry.version == version) {
+        return entry.allow_io_csv_read;
+      }
+    }
+  }
+  return false;  // Default deny
 }
 
 // Tracked write array for committing data back
@@ -81,7 +152,168 @@ struct JsContext {
   int64_t max_instructions;
   bool interrupted;
   std::vector<TrackedWriteArray> tracked_writes;
+
+  // IO context
+  bool io_enabled;
+  std::string csv_assets_dir;
+  NjsBudget* budget;  // For IO budget tracking
 };
+
+// Get string from JS value (forward declaration for use in IO functions)
+static std::string JsGetString(JSContext* ctx, JSValueConst val);
+
+// Convert nlohmann::json to JS value (forward declaration)
+static JSValue JsonToJs(JSContext* ctx, const nlohmann::json& j);
+
+// Helper: validate CSV resource path (no traversal, no absolute)
+static bool ValidateCsvPath(const std::string& resource, std::string* error_out) {
+  // Reject absolute paths
+  if (!resource.empty() && (resource[0] == '/' || resource[0] == '\\')) {
+    if (error_out) *error_out = "Absolute paths not allowed: " + resource;
+    return false;
+  }
+  // Reject path traversal
+  if (resource.find("..") != std::string::npos) {
+    if (error_out) *error_out = "Path traversal not allowed: " + resource;
+    return false;
+  }
+  // Reject backslash (Windows-style)
+  if (resource.find('\\') != std::string::npos) {
+    if (error_out) *error_out = "Backslash not allowed in path: " + resource;
+    return false;
+  }
+  return true;
+}
+
+// Helper: parse CSV file and return { columns: { col: [...] }, rowCount: N }
+static nlohmann::json ParseCsvFile(const std::string& path, NjsBudget& budget,
+                                    std::string* error_out) {
+  // Enforce "0 = no IO allowed" semantics
+  if (budget.max_io_read_bytes == 0 || budget.max_io_read_rows == 0) {
+    if (error_out) *error_out = "IO budget not configured (max_io_read_bytes/rows = 0)";
+    return nullptr;
+  }
+
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    if (error_out) *error_out = "Failed to open CSV file: " + path;
+    return nullptr;
+  }
+
+  nlohmann::json result;
+  result["columns"] = nlohmann::json::object();
+  result["rowCount"] = 0;
+
+  std::string line;
+  std::vector<std::string> headers;
+  std::vector<std::vector<std::string>> columns;
+  int64_t row_count = 0;
+  int64_t bytes_read = 0;
+
+  // Read header
+  if (std::getline(file, line)) {
+    bytes_read += line.size() + 1;
+
+    // Simple CSV parsing (comma-separated, no quotes handling for MVP)
+    std::stringstream ss(line);
+    std::string cell;
+    while (std::getline(ss, cell, ',')) {
+      // Trim whitespace
+      size_t start = cell.find_first_not_of(" \t\r\n");
+      size_t end = cell.find_last_not_of(" \t\r\n");
+      if (start != std::string::npos && end != std::string::npos) {
+        cell = cell.substr(start, end - start + 1);
+      }
+      headers.push_back(cell);
+      columns.push_back({});
+    }
+  }
+
+  // Read data rows
+  while (std::getline(file, line)) {
+    // Check IO budget (cumulative across all readCsv calls)
+    bytes_read += line.size() + 1;
+    int64_t total_bytes = budget.io_bytes_read + bytes_read;
+    int64_t total_rows = budget.io_rows_read + row_count + 1;
+    if (total_bytes > budget.max_io_read_bytes) {
+      if (error_out) *error_out = "IO budget exceeded: max_io_read_bytes";
+      return nullptr;
+    }
+    if (total_rows > budget.max_io_read_rows) {
+      if (error_out) *error_out = "IO budget exceeded: max_io_read_rows";
+      return nullptr;
+    }
+
+    std::stringstream ss(line);
+    std::string cell;
+    size_t col_idx = 0;
+    while (std::getline(ss, cell, ',') && col_idx < columns.size()) {
+      // Trim whitespace
+      size_t start = cell.find_first_not_of(" \t\r\n");
+      size_t end = cell.find_last_not_of(" \t\r\n");
+      if (start != std::string::npos && end != std::string::npos) {
+        cell = cell.substr(start, end - start + 1);
+      } else {
+        cell = "";
+      }
+      columns[col_idx].push_back(cell);
+      col_idx++;
+    }
+    // Fill missing columns
+    while (col_idx < columns.size()) {
+      columns[col_idx].push_back("");
+      col_idx++;
+    }
+    row_count++;
+  }
+
+  // Update budget tracking
+  budget.io_bytes_read += bytes_read;
+  budget.io_rows_read += row_count;
+
+  // Build result object
+  for (size_t i = 0; i < headers.size(); i++) {
+    result["columns"][headers[i]] = columns[i];
+  }
+  result["rowCount"] = row_count;
+
+  return result;
+}
+
+// ctx.io.readCsv(resource, opts?)
+static JSValue JsIoReadCsv(JSContext* ctx, JSValueConst this_val,
+                           int argc, JSValueConst* argv, int magic, JSValue* func_data) {
+  auto* js_ctx = static_cast<JsContext*>(JS_GetContextOpaque(ctx));
+
+  // Check if IO is enabled
+  if (!js_ctx->io_enabled) {
+    return JS_ThrowTypeError(ctx, "IO capability not enabled for this module");
+  }
+
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "readCsv requires resource argument");
+  }
+
+  std::string resource = JsGetString(ctx, argv[0]);
+
+  // Validate path
+  std::string error;
+  if (!ValidateCsvPath(resource, &error)) {
+    return JS_ThrowTypeError(ctx, "%s", error.c_str());
+  }
+
+  // Resolve full path under assets directory
+  std::string full_path = js_ctx->csv_assets_dir + "/" + resource;
+
+  // Parse CSV
+  nlohmann::json csv_data = ParseCsvFile(full_path, *js_ctx->budget, &error);
+  if (csv_data.is_null()) {
+    return JS_ThrowTypeError(ctx, "%s", error.c_str());
+  }
+
+  // Convert to JS object
+  return JsonToJs(ctx, csv_data);
+}
 
 // Get string from JS value
 static std::string JsGetString(JSContext* ctx, JSValueConst val) {
@@ -342,7 +574,8 @@ class NjsRunner::Impl {
 
   Impl() {
     rt = JS_NewRuntime();
-    ctx = JS_NewContext(rt);
+    // Note: We don't create ctx here - we create fresh contexts per execution
+    // to ensure clean sandbox state. This also ensures std/os modules are never exposed.
   }
 
   ~Impl() {
@@ -350,17 +583,22 @@ class NjsRunner::Impl {
     if (rt) JS_FreeRuntime(rt);
   }
 
-  void SetupBatchAPI(JSContext* js_ctx, JSValueConst batch_obj) {
-    JS_SetPropertyStr(js_ctx, batch_obj, "rowCount",
-      JS_NewCFunctionData(js_ctx, JsBatchRowCount, 0, 0, 0, nullptr));
-    JS_SetPropertyStr(js_ctx, batch_obj, "f32",
-      JS_NewCFunctionData(js_ctx, JsBatchGetF32, 1, 0, 0, nullptr));
-    JS_SetPropertyStr(js_ctx, batch_obj, "i64",
-      JS_NewCFunctionData(js_ctx, JsBatchGetI64, 1, 0, 0, nullptr));
-    JS_SetPropertyStr(js_ctx, batch_obj, "writeF32",
-      JS_NewCFunctionData(js_ctx, JsBatchWriteF32, 1, 0, 0, nullptr));
-    JS_SetPropertyStr(js_ctx, batch_obj, "writeI64",
-      JS_NewCFunctionData(js_ctx, JsBatchWriteI64, 1, 0, 0, nullptr));
+  void SetupBatchAPI(JSContext* js_ctx_handle, JSValueConst batch_obj) {
+    JS_SetPropertyStr(js_ctx_handle, batch_obj, "rowCount",
+      JS_NewCFunctionData(js_ctx_handle, JsBatchRowCount, 0, 0, 0, nullptr));
+    JS_SetPropertyStr(js_ctx_handle, batch_obj, "f32",
+      JS_NewCFunctionData(js_ctx_handle, JsBatchGetF32, 1, 0, 0, nullptr));
+    JS_SetPropertyStr(js_ctx_handle, batch_obj, "i64",
+      JS_NewCFunctionData(js_ctx_handle, JsBatchGetI64, 1, 0, 0, nullptr));
+    JS_SetPropertyStr(js_ctx_handle, batch_obj, "writeF32",
+      JS_NewCFunctionData(js_ctx_handle, JsBatchWriteF32, 1, 0, 0, nullptr));
+    JS_SetPropertyStr(js_ctx_handle, batch_obj, "writeI64",
+      JS_NewCFunctionData(js_ctx_handle, JsBatchWriteI64, 1, 0, 0, nullptr));
+  }
+
+  void SetupIoAPI(JSContext* js_ctx_handle, JSValueConst io_obj) {
+    JS_SetPropertyStr(js_ctx_handle, io_obj, "readCsv",
+      JS_NewCFunctionData(js_ctx_handle, JsIoReadCsv, 1, 0, 0, nullptr));
   }
 };
 
@@ -493,11 +731,36 @@ CandidateBatch NjsRunner::Run(const ExecContext& ctx,
   impl_->js_ctx.registry = ctx.registry;
   impl_->js_ctx.tracked_writes.clear();
 
+  // Initialize IO context (default: disabled)
+  impl_->js_ctx.io_enabled = false;
+  impl_->js_ctx.csv_assets_dir = "";
+  impl_->js_ctx.budget = &budget;
+
+  // Check if module requests IO capability
+  bool io_requested = meta.capabilities.io.csv_read;
+  bool io_allowed = false;
+
+  if (io_requested) {
+    // Check policy (default deny if no policy set)
+    if (policy_ && policy_->IsIoCsvReadAllowed(meta.name, meta.version)) {
+      io_allowed = true;
+      impl_->js_ctx.io_enabled = true;
+      impl_->js_ctx.csv_assets_dir = policy_->CsvAssetsDir();
+    }
+  }
+
   // Create ctx.batch object
   JSValue ctx_obj = JS_NewObject(js_ctx_handle);
   JSValue batch_obj = JS_NewObject(js_ctx_handle);
   impl_->SetupBatchAPI(js_ctx_handle, batch_obj);
   JS_SetPropertyStr(js_ctx_handle, ctx_obj, "batch", batch_obj);
+
+  // Create ctx.io object if IO is allowed
+  if (io_allowed) {
+    JSValue io_obj = JS_NewObject(js_ctx_handle);
+    impl_->SetupIoAPI(js_ctx_handle, io_obj);
+    JS_SetPropertyStr(js_ctx_handle, ctx_obj, "io", io_obj);
+  }
 
   // Create objs array (for row-level API compatibility)
   JSValue objs_arr = JS_NewArray(js_ctx_handle);

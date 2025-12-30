@@ -21,9 +21,27 @@ struct NjsBudget {
   int64_t max_write_bytes = 1048576;   // 1MB default
   int64_t max_write_cells = 100000;    // 100k cells default
   int64_t max_set_per_obj = 10;        // For row-level API
+  int64_t max_io_read_bytes = 0;       // 0 = no IO allowed
+  int64_t max_io_read_rows = 0;        // 0 = no IO allowed
 
   int64_t bytes_written = 0;
   int64_t cells_written = 0;
+  int64_t io_bytes_read = 0;
+  int64_t io_rows_read = 0;
+};
+
+/**
+ * IO capabilities for njs modules (default: all false).
+ */
+struct NjsIoCapabilities {
+  bool csv_read = false;
+};
+
+/**
+ * Capabilities that an njs module may request.
+ */
+struct NjsCapabilities {
+  NjsIoCapabilities io;
 };
 
 /**
