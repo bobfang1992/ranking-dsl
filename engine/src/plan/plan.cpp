@@ -1,10 +1,27 @@
 #include "plan/plan.h"
 
 #include <fstream>
+#include <regex>
 
 #include <nlohmann/json.hpp>
 
 namespace ranking_dsl {
+
+// Validate trace_key: 1-64 chars, charset [A-Za-z0-9._/-]
+std::string ValidateTraceKey(const std::string& trace_key) {
+  if (trace_key.empty()) {
+    return "";  // Empty is valid (means not set)
+  }
+  if (trace_key.length() > 64) {
+    return "trace_key must be at most 64 characters (got " +
+           std::to_string(trace_key.length()) + ")";
+  }
+  static const std::regex pattern("^[A-Za-z0-9._/-]+$");
+  if (!std::regex_match(trace_key, pattern)) {
+    return "trace_key must only contain [A-Za-z0-9._/-]";
+  }
+  return "";
+}
 
 bool ParsePlan(const nlohmann::json& json, Plan& out, std::string* error_out) {
   try {
@@ -24,6 +41,19 @@ bool ParsePlan(const nlohmann::json& json, Plan& out, std::string* error_out) {
       }
 
       node.params = node_json.value("params", nlohmann::json::object());
+
+      // Parse trace_key (optional, NOT inside params)
+      if (node_json.contains("trace_key")) {
+        node.trace_key = node_json["trace_key"].get<std::string>();
+        std::string validation_error = ValidateTraceKey(node.trace_key);
+        if (!validation_error.empty()) {
+          if (error_out) {
+            *error_out = "Node '" + node.id + "': " + validation_error;
+          }
+          return false;
+        }
+      }
+
       out.nodes.push_back(std::move(node));
     }
 

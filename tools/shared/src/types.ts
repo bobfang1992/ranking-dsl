@@ -63,6 +63,41 @@ export type Value =
   | Float32Array; // f32vec
 
 /**
+ * Node options for tracing metadata.
+ */
+export interface NodeOpts {
+  /**
+   * Optional stable identifier for this node within a plan.
+   * Used for tracing/logging diagnostics.
+   * Constraints: length 1..64, charset: [A-Za-z0-9._/-]
+   */
+  trace_key?: string;
+}
+
+/**
+ * Regex pattern for valid trace_key values.
+ * Charset: [A-Za-z0-9._/-], length 1..64
+ */
+export const TRACE_KEY_PATTERN = /^[A-Za-z0-9._/-]{1,64}$/;
+
+/**
+ * Validate a trace_key value.
+ * Returns null if valid, error message if invalid.
+ */
+export function validateTraceKey(traceKey: string): string | null {
+  if (traceKey.length === 0) {
+    return 'trace_key must not be empty';
+  }
+  if (traceKey.length > 64) {
+    return `trace_key must be at most 64 characters (got ${traceKey.length})`;
+  }
+  if (!TRACE_KEY_PATTERN.test(traceKey)) {
+    return 'trace_key must only contain [A-Za-z0-9._/-]';
+  }
+  return null;
+}
+
+/**
  * Plan node specification.
  */
 export interface NodeSpec {
@@ -74,6 +109,8 @@ export interface NodeSpec {
   inputs: string[];
   /** Node parameters. */
   params: Record<string, unknown>;
+  /** Optional trace key for tracing/logging (NOT inside params). */
+  trace_key?: string;
 }
 
 /**

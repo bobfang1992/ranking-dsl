@@ -19,7 +19,14 @@ struct NodeSpec {
   std::string op;
   std::vector<std::string> inputs;
   nlohmann::json params;
+  std::string trace_key;  // Optional trace key for tracing/logging (empty = not set)
 };
+
+/**
+ * Validate a trace_key value.
+ * Returns empty string if valid, error message if invalid.
+ */
+std::string ValidateTraceKey(const std::string& trace_key);
 
 /**
  * Logging configuration.

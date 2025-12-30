@@ -729,6 +729,47 @@ ranking-dsl/
 
 ---
 
+### Phase 3.5: njs Sandbox + Host IO ✅ COMPLETED
+
+**Policy-gated host IO capabilities for njs modules:**
+- [x] `ctx.io.readCsv(path)` - reads CSV files, returns array of objects
+- [x] `meta.capabilities: ["io"]` - module must declare IO capability
+- [x] NjsPolicy - per-module policy allowlist for paths and budgets
+- [x] Path traversal rejection (no `..` allowed)
+- [x] Budget enforcement: `max_io_bytes_read` limit
+- [x] Tests: capability gating, path rejection, budget limits
+
+---
+
+### Phase 3.6: Plan Complexity Governance ✅ COMPLETED
+
+**Two-layer complexity budgets (TS CLI + C++ engine):**
+- [x] ComplexityMetrics: node_count, edge_count, max_depth, fanout_peak, fanin_peak
+- [x] complexity_score: weighted combination of metrics
+- [x] Shared policy file: `configs/complexity_budgets.json`
+- [x] Hard limits (reject at compile) + soft limits (warn)
+- [x] TypeScript: `checkComplexityBudgets()` in shared package
+- [x] C++: `CheckComplexityBudget()` in PlanCompiler
+- [x] CLI: `rankdsl validate plan.json --budget <file>`
+- [x] Cross-check test ensuring TS and C++ produce matching metrics
+
+---
+
+### Phase 3.7: Node-level Tracing ✅ COMPLETED
+
+**trace_key and njs trace prefixing:**
+- [x] `NodeOpts.trace_key` - optional stable identifier (1-64 chars, `[A-Za-z0-9._/-]`)
+- [x] trace_key in plan JSON node envelope (NOT inside params)
+- [x] `Tracer::SpanName()` - formats `op(trace_key)`
+- [x] `Tracer::DeriveTracePrefix()` - extracts filename stem from njs path
+- [x] `Tracer::PrefixedTraceKey()` - combines `{prefix}::{child}`
+- [x] `TraceContext` struct for njs modules
+- [x] `LogNodeStart/LogNodeEnd` emit trace_key and span_name in JSON
+- [x] TS: validateTraceKey() + 16 unit tests
+- [x] C++: ValidateTraceKey() + 14 test sections
+
+---
+
 ### Phase 4: CLI & Integration
 
 **4.1 CLI**
