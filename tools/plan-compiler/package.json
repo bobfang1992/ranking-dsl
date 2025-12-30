@@ -13,8 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --root ../.. --passWithNoTests tools/plan-compiler",
+    "test:watch": "vitest --root ../.."
   },
   "dependencies": {
     "@ranking-dsl/shared": "*",

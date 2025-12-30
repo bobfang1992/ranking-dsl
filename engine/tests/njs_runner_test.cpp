@@ -385,3 +385,104 @@ TEST_CASE("NjsMeta parsing", "[njs][meta]") {
     REQUIRE(meta.budget.max_write_cells == 100000);   // 100k default
   }
 }
+
+// ============================================================================
+// QuickJS Execution Tests - These actually run JavaScript via QuickJS
+// ============================================================================
+
+// Helper to get the test data directory (relative to where tests are run from)
+static std::string GetTestDataDir() {
+  // Tests are run from build directory, testdata is in engine/tests/testdata
+  return "engine/tests/testdata/";
+}
+
+TEST_CASE("QuickJS execution - valid module", "[njs][quickjs]") {
+  // Create input batch with score.base column (key 3001)
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  NjsRunner runner;
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "valid_module.njs";
+
+  // This should execute the JS code and write to score.ml (key 3002)
+  CandidateBatch result = runner.Run(exec_ctx, batch, params);
+
+  REQUIRE(result.RowCount() == 3);
+  REQUIRE(result.HasColumn(keys::id::SCORE_ML));
+
+  auto* ml_col = result.GetF32Column(keys::id::SCORE_ML);
+  REQUIRE(ml_col != nullptr);
+  // The valid_module.njs writes 42.0 to all rows
+  REQUIRE(ml_col->Get(0) == Catch::Approx(42.0f));
+  REQUIRE(ml_col->Get(1) == Catch::Approx(42.0f));
+  REQUIRE(ml_col->Get(2) == Catch::Approx(42.0f));
+}
+
+TEST_CASE("QuickJS execution - unauthorized write fails", "[njs][quickjs][enforcement]") {
+  // Create input batch
+  auto score_col = std::make_shared<F32Column>(3);
+  score_col->Set(0, 1.0f);
+  score_col->Set(1, 2.0f);
+  score_col->Set(2, 3.0f);
+
+  ColumnBatch batch(3);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  NjsRunner runner;
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "unauthorized_write.njs";
+
+  // This module tries to write to key 3003 which is NOT in its meta.writes
+  // It should throw an error when JS tries to call ctx.batch.writeF32(3003)
+  REQUIRE_THROWS_WITH(
+      runner.Run(exec_ctx, batch, params),
+      Catch::Matchers::ContainsSubstring("not in meta.writes"));
+}
+
+TEST_CASE("QuickJS execution - budget exceeded fails", "[njs][quickjs][budget]") {
+  // Create a large input batch (100 rows) to exceed the budget
+  auto score_col = std::make_shared<F32Column>(100);
+  for (size_t i = 0; i < 100; i++) {
+    score_col->Set(i, static_cast<float>(i));
+  }
+
+  ColumnBatch batch(100);
+  batch.SetColumn(keys::id::SCORE_BASE, score_col);
+
+  KeyRegistry registry;
+  registry.LoadFromCompiled();
+
+  ExecContext exec_ctx;
+  exec_ctx.registry = &registry;
+
+  NjsRunner runner;
+
+  nlohmann::json params;
+  params["module"] = GetTestDataDir() + "budget_exceeded.njs";
+
+  // This module has budget max_write_cells=10, but we're passing 100 rows
+  // It should fail when trying to allocate the write array
+  REQUIRE_THROWS_WITH(
+      runner.Run(exec_ctx, batch, params),
+      Catch::Matchers::ContainsSubstring("max_write_cells"));
+}
