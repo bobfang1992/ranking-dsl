@@ -849,7 +849,35 @@ CandidateBatch NjsRunner::RunWithMeta(
   return builder.Build();
 }
 
+// NodeSpec for njs runner (internal - not exposed in node catalog)
+// Note: Actual njs nodes are registered via nodes.yaml with pinned identities
+static NodeSpec CreateNjsRunnerSpec() {
+  NodeSpec spec;
+  spec.op = "njs";
+  spec.namespace_path = "internal.njs";  // Not exposed to plan authors
+  spec.stability = Stability::kStable;
+  spec.doc = "Internal njs runner - use specific njs nodes from catalog instead";
+  spec.params_schema_json = R"({
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Path to .njs module"
+      },
+      "params": {
+        "type": "object",
+        "description": "Parameters for the njs module"
+      }
+    },
+    "required": ["path"]
+  })";
+  spec.reads = {};  // Dynamic - depends on njs module
+  spec.writes.kind = WritesDescriptor::Kind::kStatic;
+  spec.writes.static_keys = {};  // Dynamic - depends on njs module
+  return spec;
+}
+
 // Register the node runner
-REGISTER_NODE_RUNNER("njs", NjsRunner);
+REGISTER_NODE_RUNNER("njs", NjsRunner, CreateNjsRunnerSpec());
 
 }  // namespace ranking_dsl

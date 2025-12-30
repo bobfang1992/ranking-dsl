@@ -61,6 +61,36 @@ class ModelNode : public NodeRunner {
   std::string TypeName() const override { return "core:model"; }
 };
 
-REGISTER_NODE_RUNNER("core:model", ModelNode);
+// NodeSpec for core:model (v0.2.8+)
+static NodeSpec CreateModelNodeSpec() {
+  NodeSpec spec;
+  spec.op = "core:model";
+  spec.namespace_path = "core.model";
+  spec.stability = Stability::kStable;
+  spec.doc = "Runs a machine learning model and writes ML score. Currently uses a stub weighted combination.";
+
+  // Params schema (JSON Schema)
+  spec.params_schema_json = R"({
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Model name identifier"
+      }
+    },
+    "required": ["name"]
+  })";
+
+  // Reads: base score and freshness feature
+  spec.reads = {keys::id::SCORE_BASE, keys::id::FEAT_FRESHNESS};
+
+  // Writes: ML score
+  spec.writes.kind = WritesDescriptor::Kind::kStatic;
+  spec.writes.static_keys = {keys::id::SCORE_ML};
+
+  return spec;
+}
+
+REGISTER_NODE_RUNNER("core:model", ModelNode, CreateModelNodeSpec());
 
 }  // namespace ranking_dsl

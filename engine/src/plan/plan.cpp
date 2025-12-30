@@ -30,7 +30,7 @@ bool ParsePlan(const nlohmann::json& json, Plan& out, std::string* error_out) {
 
     out.nodes.clear();
     for (const auto& node_json : json["nodes"]) {
-      NodeSpec node;
+      PlanNode node;
       node.id = node_json["id"].get<std::string>();
       node.op = node_json["op"].get<std::string>();
 

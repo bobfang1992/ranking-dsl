@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /**
- * @ranking-dsl/cli - rankdsl CLI.
- *
- * TODO: Implement fully in Phase 4.
+ * @ranking-dsl/cli - rankdsl CLI (v0.2.8+).
  */
 
 import { Command } from 'commander';
@@ -16,6 +14,7 @@ import {
   defaultBudget,
   type Plan,
 } from '@ranking-dsl/shared';
+import { exportNodes, codegenNodes } from '@ranking-dsl/nodes-codegen';
 
 const program = new Command();
 
@@ -141,6 +140,68 @@ program
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
+  });
+
+// nodes command group (v0.2.8+)
+const nodesCmd = program
+  .command('nodes')
+  .description('Node catalog management and code generation');
+
+nodesCmd
+  .command('export')
+  .description('Export node catalog from C++ engine and njs modules')
+  .option('--engine-build <dir>', 'Path to engine build directory', 'engine/build')
+  .option('--njs <dir>', 'Path to njs modules directory', 'njs')
+  .option('-o, --output <path>', 'Output YAML path', 'nodes/generated/nodes.yaml')
+  .action(async (options) => {
+    const result = await exportNodes({
+      engineBuildDir: path.resolve(options.engineBuild),
+      njsDir: path.resolve(options.njs),
+      outputPath: path.resolve(options.output),
+    });
+
+    if (result.success) {
+      process.exit(0);
+    } else {
+      console.error('Node export failed:');
+      for (const error of result.errors) {
+        console.error(`  ${error}`);
+      }
+      process.exit(1);
+    }
+  });
+
+nodesCmd
+  .command('codegen')
+  .description('Generate TypeScript bindings from node catalog')
+  .option('-i, --input <path>', 'Input nodes.yaml path', 'nodes/generated/nodes.yaml')
+  .option('-o, --output <path>', 'Output TypeScript path', 'nodes/generated/nodes.ts')
+  .action(async (options) => {
+    const result = await codegenNodes({
+      nodesYamlPath: path.resolve(options.input),
+      outputPath: path.resolve(options.output),
+    });
+
+    if (result.success) {
+      process.exit(0);
+    } else {
+      console.error('Node codegen failed:');
+      for (const error of result.errors) {
+        console.error(`  ${error}`);
+      }
+      process.exit(1);
+    }
+  });
+
+nodesCmd
+  .command('graduate <node>')
+  .description('Graduate an experimental node to stable')
+  .option('--to <namespace>', 'New namespace path (e.g., core.merge.weightedUnion)')
+  .action((node, options) => {
+    // TODO: Implement graduation workflow
+    console.log(`Graduate node ${node} to ${options.to}`);
+    console.log('Graduation workflow: Update NodeSpec source, regenerate catalog + bindings');
+    process.exit(1); // Not implemented yet
   });
 
 program.parse();

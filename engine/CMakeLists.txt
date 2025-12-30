@@ -151,6 +151,10 @@ target_link_libraries(ranking_dsl_engine
 add_executable(rankdsl_engine src/main.cpp)
 target_link_libraries(rankdsl_engine PRIVATE ranking_dsl_engine CLI11::CLI11)
 
+# Export nodes utility (for `rankdsl nodes export`)
+add_executable(rankdsl_export_nodes src/export_nodes.cpp)
+target_link_libraries(rankdsl_export_nodes PRIVATE ranking_dsl_engine)
+
 # Tests
 if(RANKING_DSL_BUILD_TESTS)
   enable_testing()

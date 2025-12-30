@@ -1,565 +1,304 @@
-# Embedded Ranking DSL + JS Nodes Spec (v0.2.7) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
-
-This spec defines an embedded DSL for ranking pipelines where:
-
-- **Plan files** (JavaScript) build a **Plan** (pure data).
-- The **engine** (C++ today) compiles and executes the Plan.
-- **Nodes** are implemented either in **C++** (core nodes) or **JavaScript** (njs nodes).
-- The object model uses **immutable key-value maps**, and **all keys are Key Handles** from a **Key Registry** (no free-form string keys).
-- Expressions can be authored either as **Expr IR** (AST builder) or as a restricted **JS expression** that is translated to Expr IR at compile time.
-- Candidate batches are **abstract** at the API level but **SHOULD** be implemented internally as **columnar (Struct-of-Arrays / SoA)** for performance.
-
----
+# Embedded Ranking DSL + Engine Spec (v0.2.8+) — Generated Namespaces from C++/njs SSOT + Experimental Graduation
 
 ## 0. RFC Keywords
-
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, **MAY**, and **OPTIONAL** are to be interpreted as described in RFC 2119.
 
 ---
 
-## 1. Terms
+## 1. What changes vs v0.2.7 (summary)
+This spec strengthens governance and developer experience at large team scale:
 
-- **Plan**: A JSON-serializable description of a pipeline graph (DAG). Contains nodes and options only.
-- **Node**: An operator in the graph. Implemented by either **C++** (core) or **JavaScript** (njs).
-- **Key Registry**: Single source of truth of all allowed keys; each key has a stable **id** and metadata.
-- **Key Handle**: A small typed object representing a key (includes `id`, `name`, `type`). Runtime uses `id`.
-- **Value**: Typed scalar/bytes/vector value stored under a KeyId.
-- **Obj (RowView)**: One candidate object; an immutable view over a single row in a CandidateBatch.
-- **CandidateBatch**: A batch of candidates processed together. API is language-agnostic; internal layout is implementation-defined.
-- **ColumnBatch (SoA)**: A CandidateBatch implementation where data is stored as columns (KeyId -> column array).
-- **BatchBuilder**: A write-optimized builder used to produce a new immutable CandidateBatch from an input batch.
-- **plan.js**: Default plan file; intended to stay simple; allows limited control flow for configuration selection.
-- **.njs**: A JavaScript node module defining a node implementation in JS.
-- **Expr IR**: JSON expression tree used by the engine to evaluate formulas during execution.
-- **JS Expr Sugar**: A restricted JS expression syntax embedded in plan.js and translated to Expr IR at compile time.
+1) **No `.node(op: string, ...)`** in plan authoring.
+   All plan nodes MUST be invoked via **generated, namespaced methods** like `p.core.merge.weightedUnion(...)`.
 
----
+2) **C++ and .njs are the source-of-truth (SSOT)** for node API metadata.
+   We export a machine-readable node catalog (YAML/JSON) from implementations, then generate TS bindings with static type check.
 
-## 2. Goals / Non-goals
+3) **njs is similar**: authors write only implementation + meta; TS typing/bindings are auto-generated.
 
-### 2.1 Goals (REQUIRED)
+4) **Namespaces** (core / io / math / experimental / …) prevent API explosion.
+   Each generated API has docstrings describing behavior + params + reads/writes + types.
 
-1. **No string keys** at runtime: all reads/writes use Key Handles (stable integer ids).
-2. **Two-phase design**: `plan.js` builds Plan only; engine executes.
-3. **Pluggable nodes**: infra engineers implement and register core nodes (C++). JS nodes are allowed via njs modules.
-4. **No arbitrary IO** in JS by default: no filesystem, network, process, or dynamic module loading for plan.js or njs at runtime. **Exception:** the engine MAY expose **explicit, policy-gated host IO capabilities** (default OFF) to specific njs modules.
-5. **Governance**: enforce constraints via:
-   - plan.js static gate (AST rules + complexity limits),
-   - JS sandbox budgets,
-   - Plan compile-time validation (shape + params + key usage),
-   - code review policy for njs modules.
-6. **Unified tracing/logging**: automatic per-node envelope spans, metrics, and optional sampled dumps.
-7. **Expression authoring ergonomics**: allow a restricted JS expression form that compiles to Expr IR.
-8. **Performance-ready data model**: CandidateBatch is abstract; implementations SHOULD be columnar (SoA) with immutable semantics.
-
-### 2.2 Non-goals (v0.2.3)
-
-- Distributed execution, cross-request caching, deep GPU/TPU optimization
-- General-purpose formula parsing language (no arbitrary string-language parser)
-- IDE plugins / advanced TS type inference
+5) **Experimental → Stable graduation** workflow via CLI.
+   Production plans MUST NOT use experimental nodes. Plans must declare env (prod/dev/test).
 
 ---
 
-## 3. Repository Layout (Mono Repo)
-
-All files MUST live in a single mono repo.
-
-### 3.1 Recommended structure
-
-```
-repo/
-  keys/
-    registry.yaml
-    generated/
-      keys.ts
-      keys.h
-      keys.json
-  plans/
-    example_rank_pipeline.plan.js
-  njs/
-    foo/
-      foo.njs
-      README.md
-  engine/
-    cpp/
-      ...
-  tools/
-    codegen/
-    lint/
-    cli/
-    shared/
-```
-
-### 3.2 Governance via code review (REQUIRED)
-
-- All changes to `njs/**` MUST go through code review.
-- The repo MUST use `CODEOWNERS` such that `njs/**` requires approval from a designated group (e.g., Ranking Infra + Safety).
-- `keys/registry.yaml` MUST also have owners and required reviewers.
-- CI MUST run:
-  - key registry validation + codegen consistency checks,
-  - plan.js static gate,
-  - njs module lint/validation (meta schema, key allowlists, budgets),
-  - unit tests for node APIs / expression translation + eval.
+## 2. Terms
+- **Plan**: JSON-serializable DAG + options; pure data.
+- **Engine compiler**: C++ compile stage that validates/lowers/instruments; authoritative fail-closed.
+- **Node**: operator in DAG; implemented by C++ (core) or JavaScript (njs).
+- **Op**: internal node identifier used by engine (e.g. `core:features` or pinned `js:path@ver#digest`).
+- **Namespace path**: hierarchical API path used by plan authors (e.g. `core.merge.weightedUnion`).
+- **NodeSpec**: machine-readable node metadata: namespace_path, stability, doc, params schema, reads/writes, budgets/capabilities.
+- **Stability**: `experimental | stable`.
+- **Plan env**: `prod | dev | test`.
+- **Key Registry**: same as v0.2.7: keys declared in `keys/registry.yaml`, stable `key_id`, codegen keys.ts/keys.h/keys.json.
 
 ---
 
-## 4. Key Registry (Key Handles)
+## 3. Two-phase architecture (unchanged)
+### 3.1 Plan builder (TS/JS)
+- Plan files (`*.plan.ts` / `*.plan.js`) evaluate to a **Plan JSON** object only.
+- Plan files MUST NOT perform ranking execution.
+- Limited `if/switch` for config routing is allowed; plan remains orchestration-level.
 
-### 4.1 Registry file (REQUIRED)
+### 3.2 Engine (C++)
+Compile MUST:
+- validate DAG (acyclic), params, keys, types, budgets, and policy gates (env, stability, IO).
+- resolve keys from `keys.json` (runtime mapping), not from JS objects.
+- translate Expr IR and enforce key types.
+- attach tracing envelope.
 
-`keys/registry.yaml` is the single source of truth.
-
-Fields:
-
-- `id` (REQUIRED): int32; MUST be globally unique and MUST NOT be reused.
-- `name` (REQUIRED): unique string; used for readability/logs only (runtime uses id).
-- `type` (REQUIRED): `bool | i64 | f32 | string | bytes | f32vec`
-- `scope` (REQUIRED): `candidate | feature | score | debug | tmp`
-- `owner` (REQUIRED): ownership tag (team/group)
-- `doc` (REQUIRED): human-readable description
-
-### 4.2 Registry governance rules (REQUIRED)
-
-- Keys MUST be **additive**. Renaming MUST be done by adding a new key and deprecating the old one (deprecation fields MAY be added in v0.3).
-- CI MUST validate:
-  - unique `id`,
-  - unique `name`,
-  - valid `type` and `scope`.
-- All pipeline code MUST reference keys through generated constants.
-
-### 4.3 Code generation outputs (REQUIRED)
-
-From `registry.yaml`, generate:
-
-- `keys/generated/keys.ts`
-- `keys/generated/keys.h`
-- `keys/generated/keys.json`
-
-No generated file may be hand-edited. CI MUST fail if generated outputs are stale.
+Execute MUST:
+- run nodes in topo order;
+- enforce budgets, writes allowlists;
+- emit tracing/logging.
 
 ---
 
-## 5. Data Model (Immutable Semantics + Columnar-Friendly)
-
-### 5.1 Value types (REQUIRED)
-
-Supported runtime value types:
-
-- `null`
-- `bool`
-- `i64`
-- `f32`
-- `string`
-- `bytes`
-- `f32vec` (vector<float32>)
-
-### 5.2 CandidateBatch is an abstraction (REQUIRED)
-
-At the node interface level, CandidateBatch MUST be treated as an abstract type with:
-
-- `row_count` (N)
-- ability to read values for a given key and row
-- ability to produce a new batch with updated values (immutability semantics)
-
-Engines MAY choose any physical layout.
-
-### 5.3 Preferred physical layout: ColumnBatch (SoA) (SHOULD)
-
-Engines SHOULD implement CandidateBatch internally as **columnar SoA**:
-
-- `columns: Map<KeyId, Column>`
-- Each Column is a typed array of length `N` (or a structured representation for bytes/vectors)
-- Columns MAY have a null-mask (bitmap) or sentinel defaults (policy-defined)
-
-This layout enables:
-
-- vectorized operations (SIMD-friendly)
-- efficient model inference (batch inputs)
-- cheap immutability via column sharing
-
-### 5.4 Row objects are views (REQUIRED)
-
-The `Obj` exposed to JS nodes is a **RowView** into a CandidateBatch:
-
-- `obj.get(Key)` reads the value at the row index from the underlying batch
-- `obj.set(Key, value)` does not mutate the batch; it creates a new RowView (or a lightweight wrapper) that records the updated value for that row in a builder
-
-Plan authors and njs authors MUST assume `Obj` is immutable and may be backed by columnar storage.
-
-### 5.5 BatchBuilder for immutability (SHOULD)
-
-To implement immutability efficiently, engines SHOULD use a BatchBuilder:
-
-- On node execution, create `builder = BatchBuilder(input_batch)`
-- `obj.set(key, value)` writes to `builder` at `(key_id, row_idx)`
-- `builder` MAY also support whole-column writes (replacement columns) to enable columnar fast paths (e.g., njs `ctx.batch` writers).
-- On completion, `builder.finish()` returns `output_batch`:
-  - unchanged columns are **shared** (zero-copy)
-  - updated columns are new arrays (or sparse overlays materialized)
-
-This preserves immutable semantics while remaining fast.
-
-### 5.6 Column representation notes (RECOMMENDED)
-
-- `f32`, `i64`, `bool`: typed arrays with optional null-mask
-- `string`, `bytes`: offset+data buffer or `vector<bytes>` (implementation-defined)
-- `f32vec`:
-  - RECOMMENDED: fixed-dimension vectors stored as one contiguous `float32[N * D]` with known `D`
-  - row access returns a view (`subarray(row*D, (row+1)*D)`) without copying
-  - future: allow optional metadata `vector_dim` in Key Registry for validation (not required in v0.2.3)
+## 4. Key governance (unchanged)
+- `keys/registry.yaml` SSOT for keys.
+- Generated outputs:
+  - `keys/generated/keys.ts`
+  - `keys/generated/keys.h`
+  - `keys/generated/keys.json`
+- Runtime uses KeyId; no string keys.
 
 ---
 
-## 6. Plan.js (Plan Builder DSL)
+## 5. Node SSOT: C++ and .njs define NodeSpec (REQUIRED)
 
-### 6.1 Purpose
+### 5.1 Core C++ nodes MUST declare NodeSpec
+A core node intended to be callable from plan MUST provide NodeSpec alongside registration.
 
-A `*.plan.js` file MUST evaluate to a Plan object (JSON-serializable). It MUST NOT execute ranking logic on real candidates.
+NodeSpec MUST include:
+- `op`: e.g. `core:features`
+- `namespace_path`: e.g. `core.features` or `experimental.core.myNewNode`
+- `stability`: `experimental|stable`
+- `doc`: human description
+- `params_schema`: JSON Schema (or equivalent)
+- `reads`: KeyId[] (or KeyHandle list)
+- `writes`: KeyId[] OR a param-derived rule (writes resolver)
+- optional: budgets/capabilities
 
-### 6.2 Global objects injected into plan.js
+**Param-derived writes (REQUIRED for correctness):**
+If writes depend on params (common), NodeSpec MUST define a writes resolver, e.g.:
+- `writes = params["keys"]` for `features({keys:[...]})`.
 
-- `dsl`: plan builder API
-- `Keys`: Key Handles (generated)
-- `config`: read-only configuration (deep-frozen)
+The engine compiler MUST use this to enforce writes.
 
-### 6.3 Allowed control flow
+### 5.2 njs nodes MUST export NodeSpec-like meta
+Each `.njs` module MUST export:
 
-Plan.js MAY use simple configuration-driven branching (if/switch). Complex logic belongs in njs nodes.
+- `exports.meta = {`
+  - `name`, `version`
+  - `namespace_path` (e.g. `njs.normalize.score` or `experimental.njs.foo.bar`)
+  - `stability` (`experimental|stable`)
+  - `doc`
+  - `reads`, `writes`
+  - `params_schema` (JSON Schema)
+  - optional `budget`, `capabilities`
+- `}`
+- `exports.runBatch(objs, ctx, params)`
 
-Plan.js MUST remain orchestration-level. The engine compiler enforces plan complexity budgets (see `docs/complexity-governance.md`). If a plan exceeds budgets, ranking engineers SHOULD collapse subgraphs into a small number of njs module nodes, or request new core C++ nodes to hide complexity behind stable abstractions.
+njs identity MUST be pinned for execution:
+- recommended internal op: `js:<path>@<version>#<digest>`
 
+---
 
-### 6.4 DSL API (REQUIRED)
+## 6. Generated plan authoring DSL (REQUIRED)
 
-#### Top-level
-
+### 6.1 Top-level
+- `dsl.planEnv(env: "prod"|"dev"|"test")` sets `plan.meta.env`
 - `dsl.sourcer(name: string, params?: object) -> SourceRef`
 - `dsl.candidates(sources: SourceRef[]) -> Pipeline`
 
-#### Pipeline (immutable)
+### 6.2 Pipeline methods: NO `.node`
+Plan authors MUST call nodes via generated namespaces based on NodeSpec `namespace_path`.
 
-All pipeline methods return a new Pipeline:
+Examples:
+- `p.core.merge.weightedUnion({ weights:[0.7,0.3], ... }, { trace_key:"merge" })`
+- `p.core.features({ keys:[Keys.feat_freshness, ...] }, { trace_key:"feat" })`
+- `p.io.csv.read({ resource:"sample.csv", ... })` (policy-gated IO example)
+- `p.experimental.core.myNewNode({ ... })` (non-prod only)
 
-- `Pipeline.features(keys: Key[], params?: object, opts?: NodeOpts) -> Pipeline`
-- `Pipeline.model(name: string, params?: object, opts?: NodeOpts) -> Pipeline`
-- `Pipeline.core.<op>(params: <typed>, opts?: NodeOpts) -> Pipeline`
-  - A namespaced, code-generated method surface for **core** nodes.
-  - Example usage: `p.core.merge({ ... }, { trace_key: "merge" })`.
-- `Pipeline.njs.<op>(params: <typed>, opts?: NodeOpts) -> Pipeline`
-  - A namespaced, code-generated method surface for **repo-owned njs** nodes.
-  - Example usage: `p.njs.normalizeScore({ ... }, { trace_key: "norm" })`.
+**Hard requirement:**
+- The plan authoring API MUST NOT expose `.node(op: string, ...)`.
 
-Static typing requirement (REQUIRED):
+### 6.3 Static typing + runtime validation (REQUIRED)
+- Generated TS bindings MUST provide static typing for params derived from `params_schema`.
+- Plan builder MUST also validate params at runtime (fail fast).
 
-- The plan authoring surface MUST provide **static type checking** for node params (TypeScript typings).
-- Params MUST also be validated at runtime by the plan builder (fail fast).
-- `Pipeline.score(expr: ExprIR | JSExprToken, params?: object, opts?: NodeOpts) -> Pipeline`
-- `Pipeline.build(options?: object) -> Plan`
+### 6.4 Docstrings / metadata surfacing (REQUIRED)
+Every generated API method MUST include docstrings that surface:
+- purpose / behavior
+- params (types + meaning)
+- reads/writes keys (Key names + ids)
+- stability (experimental/stable)
+- budgets/capabilities (if any)
 
-#### NodeOpts (REQUIRED)
+---
 
-`NodeOpts` attaches **human-readable tracing metadata** to a plan node (does not affect ranking semantics):
+## 7. Namespaces (REQUIRED)
+Namespaces are hierarchical to prevent API explosion. NodeSpec provides `namespace_path` which drives generation.
 
-- `trace_key?: string` — optional stable identifier for this node within a plan, used for tracing/logging diagnostics.
+Recommended top-level namespaces:
+- `core.*`: stable C++ nodes
+- `njs.*`: stable njs nodes
+- `io.*`: IO-related nodes/capabilities (policy gated)
+- `math.*`: expression helpers (for Expr sugar/builder)
+- `experimental.*`: experimental nodes (both C++ and njs)
+  - `experimental.core.*`
+  - `experimental.njs.*`
+  - `experimental.io.*` (optional)
 
-Constraints (RECOMMENDED, compiler-enforced):
+Rule:
+- `stability=experimental` MUST appear only under `experimental.*` namespace paths.
+- `stability=stable` MUST NOT appear under `experimental.*`.
 
-- length 1..64
-- charset: `[A-Za-z0-9._/-]`
-- SHOULD be unique within a plan (duplicates MAY be rejected or warned)
+---
 
-Example:
+## 8. Node catalog export + TS binding generation (REQUIRED)
 
-```js
-p = p.model("vm_v1", { /* params */ }, { trace_key: "final_vm" })
-     .score(dsl.expr(() => 0.7 * Keys.A + 0.3 * Keys.B), {}, { trace_key: "final_score" });
+### 8.1 Export node catalog from SSOT
+Provide a command:
+
+- `rankdsl nodes export`
+
+It MUST:
+- extract NodeSpecs from C++ registry (or a compiled dump),
+- scan `.njs` modules for `exports.meta`,
+- compute pinned njs identity: `path@version#digest`,
+- output machine-readable catalog:
+  - `nodes/generated/nodes.yaml` (or `.json`)
+  - each entry contains: op, namespace_path, stability, doc, params_schema, reads/writes, budgets/capabilities.
+
+### 8.2 Generate TS bindings
+Provide a command:
+
+- `rankdsl nodes codegen`
+
+It MUST:
+- read `nodes/generated/nodes.yaml`,
+- generate TS bindings that attach namespaces and typed methods onto Pipeline:
+  - e.g. `nodes/generated/nodes.ts`
+- embed docstrings and read/write metadata in TS.
+- be deterministic.
+
+### 8.3 CI requirements
+CI MUST:
+- run `rankdsl nodes export` and `rankdsl nodes codegen`,
+- fail if generated files are stale,
+- fail if a node is callable but missing required NodeSpec fields.
+
+---
+
+## 9. Plan env (prod/dev/test) and enforcement (REQUIRED)
+
+### 9.1 How to mark a plan as prod/dev/test
+Plans MUST declare environment either:
+
+**Option A (recommended): in plan file**
+- `dsl.planEnv("prod"|"dev"|"test")` → `plan.meta.env`
+
+**Option B: file suffix**
+- `*.prod.plan.js`, `*.dev.plan.js`, `*.test.plan.js`
+
+If both exist, explicit declaration wins.
+
+### 9.2 Enforcement rules
+Engine compiler MUST enforce:
+- if `env == "prod"`:
+  - reject any node with `stability=experimental`
+  - reject any IO capability not explicitly allowed by prod policy
+- if `env in {"dev","test"}`:
+  - experimental nodes MAY be allowed (policy-controlled)
+
+---
+
+## 10. Experimental workflow + graduation (REQUIRED)
+
+### 10.1 Creating a new C++ node (infra)
+Infra engineers can introduce new nodes as:
+- `namespace_path = experimental.core.<name>`
+- `stability = experimental`
+
+They can write plans/tests using:
+- `p.experimental.core.<name>(...)`
+
+### 10.2 Graduation to stable
+Provide a command:
+
+- `rankdsl nodes graduate <node_id|namespace_path> --to <new_namespace_path>`
+
+Graduation MUST:
+- update source-of-truth metadata (C++ NodeSpec or `.njs` meta):
+  - `stability: experimental → stable`
+  - move `namespace_path` from `experimental.*` → stable namespace (e.g. `core.*`)
+- regenerate node catalog + TS bindings.
+
+---
+
+## 11. Tracing: trace_key (REQUIRED)
+Plan nodes MAY attach `trace_key` (NodeOpts).
+Engine MUST:
+- include `trace_key` in node_start/node_end logs
+- attach as span attribute
+- include in span name: `op(trace_key)`.
+
+For njs nested native calls (if host supports calling native ops from njs):
+- prefix nested trace_key with `.njs` filename stem or namespace_path prefix.
+
+---
+
+## 12. Complexity budgets (REQUIRED)
+To avoid "10k-node graphs" that are impossible to debug:
+- plan-side tooling SHOULD warn early (DX).
+- engine compiler MUST enforce fail-closed budgets.
+
+Minimum metrics:
+- node_count, edge_count, max_depth, fanout_peak, fanin_peak
+
+If over budget:
+- error MUST include actionable diagnostics (top offenders + longest path summary)
+- remediation hint: collapse logic into fewer nodes (njs modules) or graduate/promote into stable core nodes.
+
+---
+
+## 13. njs sandbox + policy-gated IO (REQUIRED)
+Default: no filesystem/network/process/shell and no QuickJS std/os modules exposed.
+
+Optional: host-provided IO only when:
+- capability declared in meta (e.g. `capabilities.io.csv_read=true`)
+- allowlisted by policy
+- budgets enforced
+- path traversal forbidden
+
+IO can be surfaced either as:
+- `ctx.io.*` (capability object), and/or
+- explicit `io.*` nodes (namespaced API), policy gated.
+
+---
+
+## 14. Testing requirements (REQUIRED)
+Repo MUST include:
+1) Deterministic generation tests (`rankdsl nodes export/codegen` stable output).
+2) TS typecheck tests (plan fixtures compile with `tsc --noEmit`).
+3) Engine policy tests:
+   - prod plan rejects experimental nodes
+   - dev/test plan can allow experimental nodes (policy)
+4) Docstring presence tests (or snapshots) to ensure reads/writes appear in generated bindings.
+
+---
+
+## Appendix: Example plan (illustrative)
+```ts
+dsl.planEnv("prod");
+
+const plan = dsl.candidates([dsl.sourcer("following", { max: 2000 })])
+  .core.merge.weightedUnion({ weights: [0.7, 0.3] }, { trace_key: "merge" })
+  .core.features({ keys: [Keys.feat_freshness] }, { trace_key: "feat" })
+  .core.model.vm({ name: "vm_v1" }, { trace_key: "vm" })
+  .build();
 ```
-
-
-#### Plan options
-
-`options.logging`:
-
-- `sample_rate` (float 0..1)
-- `dump_keys` (KeyId[])
-
----
-
-## 7. Expressions — Two Authoring Modes
-
-Expressions ultimately execute in the engine via Expr IR. v0.2.3 supports:
-
-1. **Expr IR builder** (`dsl.F.*`)
-2. **JS Expr Sugar** (`dsl.expr(() => ...)`) compiled to Expr IR
-
-The canonical representation stored in Plan MUST be Expr IR.
-
----
-
-## 8. Expr IR (Canonical)
-
-Core ops:
-
-- `const`, `signal(key_id)`, `add`, `mul`, `cos` (cosine similarity), `penalty(name)`
-  Optional ops:
-- `min`, `max`, `clamp`, `div` (policy-gated)
-
-`cos(a,b)` semantics:
-
-- cosine similarity between two `f32vec`
-- missing/zero-norm → 0.0
-- clamp result to [-1, 1]
-
----
-
-## 9. JS Expr Sugar (Restricted JS Expression → Expr IR)
-
-### 9.1 API surface (REQUIRED)
-
-```js
-p = p.score(
-  dsl.expr(() => 0.7 * Keys.SCORE_BASE + 0.3 * Keys.SCORE_ML),
-  { output_key_id: Keys.SCORE_FINAL.id }
-);
-```
-
-The function MUST NOT be executed; it is a syntax container only.
-
-### 9.2 Whitelisted function namespace (REQUIRED)
-
-Function calls in JS Expr Sugar MUST be in `dsl.fn.*` (no bare `cos(...)`):
-
-- `dsl.fn.cosSim(a,b)` (alias: `dsl.fn.cos`)
-- `dsl.fn.min(...)`
-- `dsl.fn.max(...)`
-- `dsl.fn.clamp(...)` (optional)
-- `dsl.fn.penalty("constraints")` (optional)
-
-All other identifiers are disallowed.
-
----
-
-## 10. Nodes
-
-### 10.1 Core node interface (REQUIRED)
-
-Nodes operate over CandidateBatch (abstract). Engines SHOULD implement it as ColumnBatch internally.
-
-```cpp
-struct NodeRunner {
-  virtual CandidateBatch run(ExecContext&, const CandidateBatch& in) = 0;
-};
-```
-
-### 10.2 njs nodes (.njs) (REQUIRED)
-
-JS nodes operate on RowViews (Obj) backed by the underlying batch.
-
-Module contract:
-
-```js
-export const meta = {
-  name: "foo",
-  version: "1.0.0",
-  reads:  [Keys.SCORE_BASE],
-  writes: [Keys.SCORE_FINAL],
-  params: { alpha: { type: "number", min: 0, max: 1, default: 0.2 } },
-  budget: { max_ms_per_1k: 2, max_set_per_obj: 10 }
-};
-
-export function runBatch(objs, ctx, params) { ... }
-```
-
-Governance:
-
-- engine MUST enforce `meta.writes` at runtime (`obj.set` rejects disallowed keys)
-- engine MUST enforce budgets
-
----
-
-
-
-#### 10.2.1 Optional: Column/Batch APIs for njs (`ctx.batch`)
-
-If the engine uses a columnar (SoA) CandidateBatch internally, njs nodes MAY use optional column APIs to reduce per-row overhead. This is a performance optimization; the default RowView (`obj.get/set`) path remains supported.
-
-When enabled, the njs runtime SHOULD expose `ctx.batch`:
-
-- Read APIs (views):
-  - `ctx.batch.rowCount() -> number`
-  - `ctx.batch.f32(key: Key) -> Float32Array` (read-only view)
-  - `ctx.batch.f32vec(key: Key) -> { data: Float32Array, dim: number }` (read-only view)
-- Write APIs (builder-backed; MUST NOT mutate input columns in-place):
-  - `ctx.batch.writeF32(key: Key) -> Float32Array`
-  - `ctx.batch.writeF32Vec(key: Key, dim: number) -> { data: Float32Array, dim: number }`
-
-Governance requirements:
-
-- All writes MUST be restricted to `meta.writes`; all writes MUST pass Key Registry type checks.
-- Reads SHOULD be restricted to `meta.reads` (policy: strict or warn).
-- If `ctx.batch` writers are used, `meta.budget` MAY additionally define:
-  - `max_write_bytes` (total bytes written via column writers)
-  - `max_write_cells` (total cells written via column writers)
-- The engine MUST enforce these budgets (in addition to time/step limits and any existing row-level budgets).
-
-`runBatch` return semantics (recommended):
-
-- If `runBatch` returns an `Obj[]`, the engine uses row-level updates (RowView path).
-- If `runBatch` returns `undefined`/`null`, the engine assumes column writers were used and commits via `builder.finish()`.
-
-
-
-#### 10.2.2 Sandbox + Optional Host IO Capabilities (DEFAULT OFF)
-
-By default, the njs runtime MUST NOT expose any general-purpose IO:
-
-- no filesystem, network, process, shell, or arbitrary module loading
-- no QuickJS std/os modules (or equivalents) exposed to user code
-
-The engine MAY expose a limited `ctx.io` object ONLY when ALL conditions hold:
-
-1. The module declares the capability in `meta.capabilities.io`.
-2. The engine-side policy allowlists this module for IO capabilities (default deny).
-3. The capability is implemented by the host (engine), not by JS.
-
-Example:
-
-```js
-exports.meta = {
-  name: "my_node",
-  version: "1.0.0",
-  reads: [/* ... */],
-  writes: [/* ... */],
-  capabilities: { io: { csv_read: true } },
-  budget: {
-    max_write_bytes: 1048576,
-    max_write_cells: 100000,
-    max_io_read_bytes: 1048576,
-    max_io_read_rows: 100000
-  }
-};
-```
-
-When enabled, `ctx.io` exposes ONLY host-provided APIs (no raw FS). MVP IO surface:
-
-- `ctx.io.readCsv(resource: string, opts?: object) -> { columns: object, rowCount: number }`
-
-Restrictions (REQUIRED):
-
-- `resource` MUST be resolved by the engine through a controlled resolver (e.g. allowlisted directory or registered asset name).
-- absolute paths and path traversal (`".."`) MUST be rejected.
-- the engine MUST enforce IO budgets (bytes/rows/time) and fail closed.
-- if `ctx.io` is not enabled, it MUST be `undefined` and any attempt to use IO MUST fail.
-
-
-
-### 10.3 Node catalog & codegen for plan authoring (REQUIRED)
-
-To achieve a small, type-safe plan authoring surface at large team scale, the set of callable nodes MUST be defined in a repo-owned node catalog and code-generated into the plan DSL.
-
-**Node catalog** (recommended layout):
-
-- `nodes/registry.yaml` declares all nodes exposed to plan authors (core and approved njs nodes), including:
-  - stable `node_id` (non-reusable)
-  - `kind`: `core` or `njs`
-  - `name` (for generated method naming)
-  - `op` string used in Plan JSON (internal representation)
-  - param schema (JSON Schema or equivalent) for runtime validation + TS type generation
-  - ownership/docs/deprecation metadata
-
-**Generated plan API**:
-
-- `Pipeline.core.<name>(params, opts?) -> Pipeline` for `kind=core` entries
-- `Pipeline.njs.<name>(params, opts?) -> Pipeline` for `kind=njs` entries
-
-Notes:
-
-- The public plan API MUST NOT expose `Pipeline.node(op: string, ...)` to ranking engineers.
-- If an escape hatch is needed for infra/tests, it MUST be explicitly marked unsafe (e.g. `Pipeline._unsafe.node(...)`) and forbidden in production plans by policy.
-
-**njs entries must be pinned**:
-
-- For `kind=njs`, the catalog MUST pin the module identity (recommended: `path@version#digest`).
-- Upgrading an njs module MUST be done by adding a new catalog entry (or bumping version/digest) and deprecating the old one.
-
-**Static typing requirement**:
-
-- Codegen MUST emit TypeScript typings so that invalid params are caught at compile time in plan authoring (or JS with type-checking enabled).
-- The plan builder MUST also validate params at runtime against the schema (fail fast).
-
-## 11. Engine: Compile & Execute
-
-Compile MUST validate:
-
-- plan version
-- DAG acyclic
-- plan complexity within budgets (node_count/depth/fan-in/out); fail closed with actionable diagnostics (see `docs/complexity-governance.md`)
-- ops resolvable
-- params valid
-- key ids exist
-- translate JSExprToken → Expr IR
-
-Execute MUST:
-
-- run nodes in topo order
-- emit structured logs and error codes
-
----
-
-## 12. Logging & Tracing (REQUIRED)
-
-Emit JSON lines:
-
-- `node_start`, `node_end` with duration, rows_in/out, error_code
-  Sample dump reads from columnar batch and prints selected dump_keys for topN rows.
-
-### 12.1 trace_key and span naming (REQUIRED)
-
-Each plan node MAY carry an optional `trace_key` (from `NodeOpts.trace_key`). The engine MUST:
-
-- include `trace_key` in `node_start`/`node_end` events (when present)
-- attach `trace_key` as a span attribute
-- incorporate `trace_key` into the span name for human debugging (recommended format: `op(trace_key)`) 
-
-Example span names:
-
-- `core:model(final_vm)`
-- `core:score_formula(final_score)`
-
-### 12.2 njs trace prefix for nested native calls (REQUIRED)
-
-For njs nodes, the engine MUST compute a `trace_prefix` (default: the `.njs` filename stem, e.g. `rank_vm.njs` → `rank_vm`).
-
-If an njs node triggers **nested native node execution** via a host-provided API (e.g. calling a core node runner from within njs), the engine MUST namespace those nested spans using the prefix:
-
-- if the nested call has its own `trace_key` `k`, use `trace_key = "{trace_prefix}::" + k`
-- otherwise, use `trace_key = "{trace_prefix}"`
-
-The engine SHOULD also attach `njs_file` and `trace_prefix` span attributes to help identify the originating module.
-
-Rationale: it must be obvious in traces/logs when a native operation was invoked from inside an njs module, and which module file it came from.
-
-
----
-
-## 13. MVP Core Nodes (Recommended baseline)
-
-1. `core:sourcer`
-2. `core:merge`
-3. `core:features`
-4. `core:model`
-5. `core:score_formula` (Expr IR eval)
-
-Core nodes SHOULD use columnar APIs internally for performance.
-
----
-
-## 14. Future work (v0.3+)
-
-- Deprecated keys and migration tooling
-- Stronger schema inference (reads/writes)
-- Arrow-compatible ColumnBatch
-- Deterministic execution modes
-- Safer i64 handling in JS
-
----

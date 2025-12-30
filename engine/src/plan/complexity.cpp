@@ -21,7 +21,7 @@ ComplexityMetrics ComputeComplexityMetrics(const Plan& plan, int top_k) {
   }
 
   // Build graph structures
-  std::unordered_map<std::string, const NodeSpec*> node_map;
+  std::unordered_map<std::string, const PlanNode*> node_map;
   std::unordered_map<std::string, std::vector<std::string>> adj;      // node -> dependents
   std::unordered_map<std::string, std::vector<std::string>> reverse;  // node -> inputs
   std::unordered_map<std::string, int64_t> out_degree;

@@ -27,6 +27,7 @@
   "references": [
     { "path": "tools/shared" },
     { "path": "tools/codegen" },
+    { "path": "tools/nodes-codegen" },
     { "path": "tools/lint" },
     { "path": "tools/expr" },
     { "path": "tools/plan-compiler" },
