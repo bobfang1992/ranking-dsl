@@ -1,0 +1,22 @@
+{
+  "name": "@ranking-dsl/nodes-codegen",
+  "version": "0.1.0",
+  "description": "Node catalog export and TypeScript binding generation (v0.2.8+)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@ranking-dsl/shared": "workspace:*",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.2",
+    "vitest": "^1.0.4"
+  }
+}

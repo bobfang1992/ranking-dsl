@@ -60,6 +60,43 @@ class ScoreFormulaNode : public NodeRunner {
   std::string TypeName() const override { return "core:score_formula"; }
 };
 
-REGISTER_NODE_RUNNER("core:score_formula", ScoreFormulaNode);
+// NodeSpec for core:score_formula (v0.2.8+)
+static NodeSpec CreateScoreFormulaNodeSpec() {
+  NodeSpec spec;
+  spec.op = "core:score_formula";
+  spec.namespace_path = "core.score";
+  spec.stability = Stability::kStable;
+  spec.doc = "Evaluates an expression (Expr IR) and writes the result to a specified key. Default output is score.final.";
+
+  // Params schema (JSON Schema)
+  spec.params_schema_json = R"({
+    "type": "object",
+    "properties": {
+      "expr": {
+        "type": "object",
+        "description": "Expression IR to evaluate"
+      },
+      "output_key_id": {
+        "type": "integer",
+        "description": "Key ID to write result to",
+        "default": 3005
+      }
+    },
+    "required": ["expr"]
+  })";
+
+  // Reads: depends on expression (dynamic), but we can't statically determine this
+  // For now, leave empty (this could be improved with expression analysis)
+  spec.reads = {};
+
+  // Writes: param-derived from output_key_id parameter
+  // For now, use static with default (could be enhanced to be param-derived)
+  spec.writes.kind = WritesDescriptor::Kind::kStatic;
+  spec.writes.static_keys = {keys::id::SCORE_FINAL};  // Default output
+
+  return spec;
+}
+
+REGISTER_NODE_RUNNER("core:score_formula", ScoreFormulaNode, CreateScoreFormulaNodeSpec());
 
 }  // namespace ranking_dsl

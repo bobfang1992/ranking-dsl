@@ -121,6 +121,37 @@ class MergeNode : public NodeRunner {
   std::string TypeName() const override { return "core:merge"; }
 };
 
-REGISTER_NODE_RUNNER("core:merge", MergeNode);
+// NodeSpec for core:merge (v0.2.8+)
+static NodeSpec CreateMergeNodeSpec() {
+  NodeSpec spec;
+  spec.op = "core:merge";
+  spec.namespace_path = "core.merge";
+  spec.stability = Stability::kStable;
+  spec.doc = "Merges and deduplicates candidates from multiple sources based on candidate ID.";
+
+  // Params schema (JSON Schema)
+  spec.params_schema_json = R"({
+    "type": "object",
+    "properties": {
+      "dedup": {
+        "type": "string",
+        "enum": ["max_base", "first"],
+        "description": "Deduplication strategy: 'max_base' keeps candidate with highest base score, 'first' keeps first occurrence",
+        "default": "first"
+      }
+    }
+  })";
+
+  // Reads: candidate ID and base score for deduplication
+  spec.reads = {keys::id::CAND_CANDIDATE_ID, keys::id::SCORE_BASE};
+
+  // Writes: preserves all columns from input (no new writes)
+  spec.writes.kind = WritesDescriptor::Kind::kStatic;
+  spec.writes.static_keys = {};  // No new columns written
+
+  return spec;
+}
+
+REGISTER_NODE_RUNNER("core:merge", MergeNode, CreateMergeNodeSpec());
 
 }  // namespace ranking_dsl

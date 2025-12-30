@@ -46,6 +46,42 @@ class SourcerNode : public NodeRunner {
   std::string TypeName() const override { return "core:sourcer"; }
 };
 
-REGISTER_NODE_RUNNER("core:sourcer", SourcerNode);
+// NodeSpec for core:sourcer (v0.2.8+)
+static NodeSpec CreateSourcerNodeSpec() {
+  NodeSpec spec;
+  spec.op = "core:sourcer";
+  spec.namespace_path = "core.sourcer";
+  spec.stability = Stability::kStable;
+  spec.doc = "Generates candidate objects from a source. Creates fake candidates with IDs and base scores for testing.";
+
+  // Params schema (JSON Schema)
+  spec.params_schema_json = R"({
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Name of the sourcer"
+      },
+      "k": {
+        "type": "integer",
+        "description": "Number of candidates to generate",
+        "minimum": 1,
+        "default": 100
+      }
+    },
+    "required": ["name"]
+  })";
+
+  // Reads: nothing (sources generate from scratch)
+  spec.reads = {};
+
+  // Writes: static list of keys
+  spec.writes.kind = WritesDescriptor::Kind::kStatic;
+  spec.writes.static_keys = {keys::id::CAND_CANDIDATE_ID, keys::id::SCORE_BASE};
+
+  return spec;
+}
+
+REGISTER_NODE_RUNNER("core:sourcer", SourcerNode, CreateSourcerNodeSpec());
 
 }  // namespace ranking_dsl

@@ -79,6 +79,37 @@ class FeaturesNode : public NodeRunner {
   std::string TypeName() const override { return "core:features"; }
 };
 
-REGISTER_NODE_RUNNER("core:features", FeaturesNode);
+// NodeSpec for core:features (v0.2.8+)
+static NodeSpec CreateFeaturesNodeSpec() {
+  NodeSpec spec;
+  spec.op = "core:features";
+  spec.namespace_path = "core.features";
+  spec.stability = Stability::kStable;
+  spec.doc = "Populates feature keys with computed or stub values. Supports f32 and f32vec features.";
+
+  // Params schema (JSON Schema)
+  spec.params_schema_json = R"({
+    "type": "object",
+    "properties": {
+      "keys": {
+        "type": "array",
+        "items": {"type": "integer"},
+        "description": "Array of key IDs to populate as features"
+      }
+    },
+    "required": ["keys"]
+  })";
+
+  // Reads: candidate ID for feature computation
+  spec.reads = {keys::id::CAND_CANDIDATE_ID};
+
+  // Writes: param-derived from "keys" parameter
+  spec.writes.kind = WritesDescriptor::Kind::kParamDerived;
+  spec.writes.param_name = "keys";
+
+  return spec;
+}
+
+REGISTER_NODE_RUNNER("core:features", FeaturesNode, CreateFeaturesNodeSpec());
 
 }  // namespace ranking_dsl

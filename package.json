@@ -6,6 +6,7 @@
   "workspaces": [
     "tools/shared",
     "tools/codegen",
+    "tools/nodes-codegen",
     "tools/lint",
     "tools/expr",
     "tools/plan-compiler",
