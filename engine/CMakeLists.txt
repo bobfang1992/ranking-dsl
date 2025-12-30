@@ -119,6 +119,7 @@ add_library(ranking_dsl_engine
   src/expr/expr.cpp
   src/plan/plan.cpp
   src/plan/compiler.cpp
+  src/plan/complexity.cpp
   src/nodes/registry.cpp
   src/nodes/core/sourcer.cpp
   src/nodes/core/merge.cpp
@@ -166,6 +167,7 @@ if(RANKING_DSL_BUILD_TESTS)
     tests/row_view_test.cpp
     tests/columnar_eval_test.cpp
     tests/njs_runner_test.cpp
+    tests/complexity_test.cpp
   )
 
   target_link_libraries(ranking_dsl_tests

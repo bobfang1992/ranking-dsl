@@ -1,0 +1,57 @@
+{
+  "name": "complexity_fixture",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "sourcer",
+      "op": "core:sourcer",
+      "inputs": [],
+      "params": {}
+    },
+    {
+      "id": "feat1",
+      "op": "core:features",
+      "inputs": ["sourcer"],
+      "params": {}
+    },
+    {
+      "id": "feat2",
+      "op": "core:features",
+      "inputs": ["sourcer"],
+      "params": {}
+    },
+    {
+      "id": "feat3",
+      "op": "core:features",
+      "inputs": ["sourcer"],
+      "params": {}
+    },
+    {
+      "id": "model1",
+      "op": "core:model",
+      "inputs": ["feat1"],
+      "params": {"model_id": "default"}
+    },
+    {
+      "id": "model2",
+      "op": "core:model",
+      "inputs": ["feat2"],
+      "params": {"model_id": "default"}
+    },
+    {
+      "id": "merge",
+      "op": "core:merge",
+      "inputs": ["model1", "model2", "feat3"],
+      "params": {}
+    },
+    {
+      "id": "final",
+      "op": "core:score_formula",
+      "inputs": ["merge"],
+      "params": {
+        "formula": {"op": "const", "value": 1.0},
+        "output_key": 4001
+      }
+    }
+  ]
+}

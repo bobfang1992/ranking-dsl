@@ -4,3 +4,4 @@
 
 export * from './types.js';
 export * from './expr-ir.js';
+export * from './complexity.js';

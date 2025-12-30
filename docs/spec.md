@@ -1,4 +1,4 @@
-# Embedded Ranking DSL + JS Nodes Spec (v0.2.4) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
+# Embedded Ranking DSL + JS Nodes Spec (v0.2.5) — Key Registry (Key Handles) + JS Expr Sugar + Columnar Batches
 
 This spec defines an embedded DSL for ranking pipelines where:
 
@@ -226,6 +226,9 @@ A `*.plan.js` file MUST evaluate to a Plan object (JSON-serializable). It MUST N
 
 Plan.js MAY use simple configuration-driven branching (if/switch). Complex logic belongs in njs nodes.
 
+Plan.js MUST remain orchestration-level. The engine compiler enforces plan complexity budgets (see `docs/complexity-governance.md`). If a plan exceeds budgets, ranking engineers SHOULD collapse subgraphs into a small number of njs module nodes, or request new core C++ nodes to hide complexity behind stable abstractions.
+
+
 ### 6.4 DSL API (REQUIRED)
 
 #### Top-level
@@ -427,6 +430,7 @@ Compile MUST validate:
 
 - plan version
 - DAG acyclic
+- plan complexity within budgets (node_count/depth/fan-in/out); fail closed with actionable diagnostics (see `docs/complexity-governance.md`)
 - ops resolvable
 - params valid
 - key ids exist
