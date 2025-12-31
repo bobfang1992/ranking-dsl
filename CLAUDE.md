@@ -66,7 +66,7 @@ gh pr create --fill
 
 ## High-Risk Areas (Address First)
 
-### 1. JS Expr Sugar: Stable Binding via AST Rewrite
+### 1. JS Expr Sugar: Stable Binding via AST Rewrite ❌ NOT DONE
 
 **Problem:** If we map `dsl.expr()` tokens to AST nodes by call order, it breaks when plan.js has branching (if/else), since runtime call order ≠ source order.
 
@@ -114,7 +114,7 @@ gh pr create --fill
 - Perfect source spans for error reporting
 - No user-visible verbosity
 
-### 2. JS Expr Sugar: No Bare Function Calls
+### 2. JS Expr Sugar: No Bare Function Calls ❌ NOT DONE
 
 **Enforcement:** The expression translator must reject any function call that is not namespaced under `dsl.fn.*`.
 
@@ -129,7 +129,7 @@ gh pr create --fill
 
 **Rationale:** Prevents name shadowing, keeps expression surface deterministic and auditable.
 
-### 2b. JS Expr Translation: Compile-Time via keys.json
+### 2b. JS Expr Translation: Compile-Time via keys.json ❌ NOT DONE
 
 **CRITICAL:** Expression translation happens at compile time using only:
 1. Source AST (from plan.js)
@@ -162,7 +162,7 @@ gh pr create --fill
   - Emit `{ "op": "signal", "key_id": <id> }`
 - For unknown key names: error with source span
 
-### 3. VM Sandbox Threat Model
+### 3. VM Sandbox Threat Model ⚠️ PARTIAL (Static Gate ✅, VM Sandbox ❌)
 
 **MVP Threat Model:**
 - `plan.js` is **trusted code** (code-reviewed, checked into monorepo)
@@ -182,18 +182,18 @@ gh pr create --fill
 **Future (if needed):**
 - For untrusted plan.js: use separate process, QuickJS isolate, or OS-level sandbox
 
-### 4. njs Runner with Columnar APIs (v0.2.4)
+### 4. njs Runner with Columnar APIs (v0.2.4) ✅ COMPLETED
 
 njs is a core escape hatch for custom logic. MVP must include a working implementation with both row-level and column-level APIs.
 
 **MVP njs Requirements:**
-- [ ] Load `.njs` module from `njs/**` path
-- [ ] Parse and validate `meta` object (name, version, reads, writes, params, budget)
-- [ ] Call `runBatch(objs, ctx, params)` (primary) or `run(obj, ctx, params)` (fallback)
-- [ ] **Enforce `meta.writes`**: `obj.set(key, v)` fails if `key` not in `meta.writes`
-- [ ] **Enforce budget**: `max_ms_per_1k`, `max_set_per_obj`, `max_write_bytes`, `max_write_cells`
-- [ ] Provide columnar APIs via `ctx.batch`
-- [ ] Handle return semantics: `Obj[]` vs `undefined/null`
+- [x] Load `.njs` module from `njs/**` path
+- [x] Parse and validate `meta` object (name, version, reads, writes, params, budget)
+- [x] Call `runBatch(objs, ctx, params)` (primary) or `run(obj, ctx, params)` (fallback)
+- [x] **Enforce `meta.writes`**: `obj.set(key, v)` fails if `key` not in `meta.writes`
+- [x] **Enforce budget**: `max_ms_per_1k`, `max_set_per_obj`, `max_write_bytes`, `max_write_cells`
+- [x] Provide columnar APIs via `ctx.batch`
+- [x] Handle return semantics: `Obj[]` vs `undefined/null`
 
 **njs Module Contract (Row-Level):**
 ```js
@@ -289,7 +289,7 @@ budget: {
 }
 ```
 
-### 5. Columnar Data Model (SoA) with Typed Columns
+### 5. Columnar Data Model (SoA) with Typed Columns ✅ COMPLETED
 
 **Goal:** Keep public semantics (immutable `Obj.set()` returns new Obj) but internally use typed columnar layout for:
 - Cache efficiency
@@ -406,7 +406,7 @@ njs node writes K2[1] via ctx.batch.writeI64:
 - Unchanged columns shared across pipeline stages
 - Vectorized SIMD operations possible for core nodes
 
-### 6. Clarifications Locked Down
+### 6. Clarifications Locked Down ✅ DOCUMENTED
 
 | Topic | Decision |
 |-------|----------|
