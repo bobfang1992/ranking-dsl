@@ -152,6 +152,58 @@ TEST_CASE("PlanEnv: meta.env is parsed correctly", "[plan_env]") {
   }
 }
 
+TEST_CASE("PlanEnv: rejects invalid env values", "[plan_env]") {
+  SECTION("Rejects 'Prod' (capitalized)") {
+    nlohmann::json plan_json = {
+      {"name", "test"},
+      {"meta", {{"env", "Prod"}}},
+      {"nodes", nlohmann::json::array()}
+    };
+    Plan plan;
+    std::string error;
+    REQUIRE_FALSE(ParsePlan(plan_json, plan, &error));
+    REQUIRE(error.find("Invalid plan.meta.env value") != std::string::npos);
+    REQUIRE(error.find("Prod") != std::string::npos);
+  }
+
+  SECTION("Rejects 'PROD' (uppercase)") {
+    nlohmann::json plan_json = {
+      {"name", "test"},
+      {"meta", {{"env", "PROD"}}},
+      {"nodes", nlohmann::json::array()}
+    };
+    Plan plan;
+    std::string error;
+    REQUIRE_FALSE(ParsePlan(plan_json, plan, &error));
+    REQUIRE(error.find("Invalid plan.meta.env value") != std::string::npos);
+  }
+
+  SECTION("Rejects 'production'") {
+    nlohmann::json plan_json = {
+      {"name", "test"},
+      {"meta", {{"env", "production"}}},
+      {"nodes", nlohmann::json::array()}
+    };
+    Plan plan;
+    std::string error;
+    REQUIRE_FALSE(ParsePlan(plan_json, plan, &error));
+    REQUIRE(error.find("Invalid plan.meta.env value") != std::string::npos);
+    REQUIRE(error.find("production") != std::string::npos);
+  }
+
+  SECTION("Rejects random value") {
+    nlohmann::json plan_json = {
+      {"name", "test"},
+      {"meta", {{"env", "staging"}}},
+      {"nodes", nlohmann::json::array()}
+    };
+    Plan plan;
+    std::string error;
+    REQUIRE_FALSE(ParsePlan(plan_json, plan, &error));
+    REQUIRE(error.find("Must be one of: \"prod\", \"dev\", \"test\"") != std::string::npos);
+  }
+}
+
 // Note: Testing "prod rejects experimental nodes" requires registering a test experimental node,
 // which would need to be done in a fixture. The core validation logic is tested above.
 // The actual rejection is verified by the ValidatePlanEnv implementation which checks
