@@ -278,6 +278,45 @@ for (size_t i = 0; i < result.RowCount(); i++) {
 }
 ```
 
+## Plan Compilation and Validation
+
+The engine compiler performs several validation passes on plans:
+
+### 1. Plan Environment Validation
+
+The compiler validates `plan.meta.env` and enforces stability requirements:
+
+```cpp
+#include "plan/compiler.h"
+
+PlanCompiler compiler(registry);
+std::string error;
+
+// ParsePlan validates meta.env is "prod", "dev", or "test" (exact match)
+Plan plan;
+if (!ParsePlan(plan_json, plan, &error)) {
+  // Invalid env value rejected here
+}
+
+// ValidatePlanEnv enforces experimental node restrictions
+if (!compiler.ValidatePlanEnv(plan, &error)) {
+  // Production plan using experimental node rejected here
+}
+```
+
+**Environment enforcement:**
+- Plans with `meta.env: "prod"` cannot use nodes with `stability: experimental`
+- Plans with `meta.env: "dev"` or `meta.env: "test"` can use experimental nodes
+- Invalid env values (e.g., `"Prod"`, `"production"`) are rejected at parse time
+- Default env is `"dev"` if not specified
+
+### 2. Other Validation Passes
+
+- DAG acyclic validation
+- Node op resolution
+- Key existence validation
+- Complexity budget enforcement
+
 ## Key Registry
 
 Keys are defined in `keys/registry.yaml` and generated to:

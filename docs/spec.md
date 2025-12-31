@@ -207,7 +207,12 @@ Plans MUST declare environment either:
 
 If both exist, explicit declaration wins.
 
-### 9.2 Enforcement rules
+### 9.2 Validation rules
+Engine compiler MUST validate that `plan.meta.env` is one of the exact string values: `"prod"`, `"dev"`, or `"test"`.
+
+**Security requirement:** Validation MUST reject any value that does not exactly match one of these three values (case-sensitive). This prevents bypass via typos like `"Prod"`, `"PROD"`, `"production"`, or `"staging"`.
+
+### 9.3 Enforcement rules
 Engine compiler MUST enforce:
 - if `env == "prod"`:
   - reject any node with `stability=experimental`

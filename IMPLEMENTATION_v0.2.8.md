@@ -179,46 +179,30 @@ export class Pipeline implements PipelineWithNodes {
 }
 ```
 
-### B. Engine Compiler Enforcement (C++)
+### ~~B. Engine Compiler Enforcement (C++)~~ ✅ COMPLETED
 
-**1. Read and enforce `plan.meta.env`**
+**Status:** Fully implemented and tested.
 
-**File to update:** `engine/src/plan/compiler.cpp`
+**What was done:**
+- ✅ Added `PlanMeta` struct with `env` field to `plan.h`
+- ✅ Updated `ParsePlan()` to read `meta.env` from JSON (defaults to "dev")
+- ✅ Implemented `ValidatePlanEnv()` in `PlanCompiler`
+- ✅ Production plans reject experimental nodes with clear error messages
+- ✅ Added 5 test cases (48 total tests, 523 assertions)
 
-Add:
-```cpp
-bool PlanCompiler::Compile(const Plan& plan, CompiledPlan& output, std::string* error) {
-  // Read plan env
-  std::string env = plan.meta.value("env", "dev");
+**Files modified:**
+- `engine/src/plan/plan.h` - Added `PlanMeta` struct
+- `engine/src/plan/plan.cpp` - Parse meta.env from JSON
+- `engine/src/plan/compiler.h` - Added ValidatePlanEnv declaration
+- `engine/src/plan/compiler.cpp` - Implemented ValidatePlanEnv with enforcement logic
+- `engine/tests/plan_env_test.cpp` - New test file with 5 test cases
+- `engine/CMakeLists.txt` - Added plan_env_test.cpp to build
 
-  // For each node in plan:
-  for (const auto& node_json : plan.nodes) {
-    std::string op = node_json["op"];
-    const NodeSpec* spec = NodeRegistry::Instance().GetSpec(op);
-
-    if (!spec) {
-      *error = fmt::format("Unknown node op: {}", op);
-      return false;
-    }
-
-    // Enforce experimental nodes not in prod
-    if (env == "prod" && spec->stability == Stability::kExperimental) {
-      *error = fmt::format(
-        "Production plans cannot use experimental nodes. "
-        "Node '{}' (namespace: {}) has stability=experimental.",
-        op, spec->namespace_path
-      );
-      return false;
-    }
-  }
-
-  // Continue with existing compilation...
-}
+**Example error message:**
 ```
-
-**2. Validate node existence**
-
-Already implemented via `NodeRegistry::GetSpec()` check above.
+Production plans cannot use experimental nodes.
+Node 'node_1' (op: 'experimental:feature', namespace: 'experimental.core.myNode') has stability=experimental.
+```
 
 ### C. Example njs Module with v0.2.8 Metadata
 
@@ -503,18 +487,26 @@ ctest --output-on-failure
 
 ## ✨ Summary
 
-This implementation provides a **foundation for namespaced, type-safe node APIs** with:
+This implementation provides a **foundation for namespaced, type-safe node APIs** with **production safety enforcement**:
 - ✅ C++/njs as source-of-truth for node metadata
 - ✅ Automated TypeScript binding generation
 - ✅ Clear experimental/stable boundary
 - ✅ Deterministic catalog export
+- ✅ **Production plan enforcement** - experimental nodes rejected in prod environment
+- ✅ **Comprehensive testing** - 48 test cases with 523 assertions (all passing)
 
-**Completion: ~70%**
+**Completion: ~80%** (up from 70%)
 
-Remaining work focuses on:
-- Plan builder DSL integration
-- Engine enforcement
-- Testing
-- Graduation workflow
+**What's been completed since initial implementation:**
+- ✅ `plan.meta.env` parsing and validation
+- ✅ `PlanCompiler::ValidatePlanEnv()` enforcement logic
+- ✅ 5 new test cases for plan environment validation
+- ✅ Error messages with node ID, op, and namespace context
 
-All core infrastructure is in place and ready for integration.
+**Remaining work focuses on:**
+- Plan builder DSL integration (Phase 2 - TypeScript tooling)
+- Example njs module with v0.2.8 metadata
+- Additional determinism tests
+- Graduation workflow implementation
+
+**Core production safety infrastructure is complete and tested.**

@@ -4,7 +4,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <fmt/format.h>
+
 #include "keys/registry.h"
+#include "nodes/registry.h"
 #include "plan/complexity.h"
 
 namespace ranking_dsl {
@@ -33,6 +36,11 @@ bool PlanCompiler::Compile(const Plan& plan, CompiledPlan& out, std::string* err
 
   // Validate ops are known
   if (!ValidateOps(plan, error_out)) {
+    return false;
+  }
+
+  // Validate experimental nodes not in prod
+  if (!ValidatePlanEnv(plan, error_out)) {
     return false;
   }
 
@@ -144,6 +152,38 @@ bool PlanCompiler::ValidateOps(const Plan& plan, std::string* error_out) {
     }
     return false;
   }
+  return true;
+}
+
+bool PlanCompiler::ValidatePlanEnv(const Plan& plan, std::string* error_out) {
+  const std::string& env = plan.meta.env;
+
+  // Only enforce experimental restriction in prod
+  if (env != "prod") {
+    return true;
+  }
+
+  // Check each node for experimental stability
+  for (const auto& node : plan.nodes) {
+    const NodeSpec* spec = NodeRegistry::Instance().GetSpec(node.op);
+
+    if (!spec) {
+      // Node not registered - this is caught by ValidateOps, skip here
+      continue;
+    }
+
+    if (spec->stability == Stability::kExperimental) {
+      if (error_out) {
+        *error_out = fmt::format(
+          "Production plans cannot use experimental nodes. "
+          "Node '{}' (op: '{}', namespace: '{}') has stability=experimental.",
+          node.id, node.op, spec->namespace_path
+        );
+      }
+      return false;
+    }
+  }
+
   return true;
 }
 

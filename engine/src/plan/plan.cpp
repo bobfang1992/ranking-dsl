@@ -28,6 +28,21 @@ bool ParsePlan(const nlohmann::json& json, Plan& out, std::string* error_out) {
     out.name = json.value("name", "unnamed");
     out.version = json.value("version", 1);
 
+    // Parse meta (optional)
+    if (json.contains("meta")) {
+      const auto& meta_json = json["meta"];
+      out.meta.env = meta_json.value("env", "dev");
+
+      // Validate env is one of the allowed values
+      if (out.meta.env != "prod" && out.meta.env != "dev" && out.meta.env != "test") {
+        if (error_out) {
+          *error_out = "Invalid plan.meta.env value: \"" + out.meta.env +
+                       "\". Must be one of: \"prod\", \"dev\", \"test\"";
+        }
+        return false;
+      }
+    }
+
     out.nodes.clear();
     for (const auto& node_json : json["nodes"]) {
       PlanNode node;
