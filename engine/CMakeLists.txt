@@ -172,6 +172,7 @@ if(RANKING_DSL_BUILD_TESTS)
     tests/columnar_eval_test.cpp
     tests/njs_runner_test.cpp
     tests/complexity_test.cpp
+    tests/plan_env_test.cpp
   )
 
   target_link_libraries(ranking_dsl_tests
