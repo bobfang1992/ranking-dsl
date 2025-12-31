@@ -37,11 +37,19 @@ struct PlanLogging {
 };
 
 /**
+ * Plan metadata.
+ */
+struct PlanMeta {
+  std::string env = "dev";  // Plan environment: "prod", "dev", or "test"
+};
+
+/**
  * A ranking plan (DAG of nodes).
  */
 struct Plan {
   std::string name;
   int version = 1;
+  PlanMeta meta;
   std::vector<PlanNode> nodes;
   PlanLogging logging;
 };

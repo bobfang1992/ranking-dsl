@@ -28,6 +28,12 @@ bool ParsePlan(const nlohmann::json& json, Plan& out, std::string* error_out) {
     out.name = json.value("name", "unnamed");
     out.version = json.value("version", 1);
 
+    // Parse meta (optional)
+    if (json.contains("meta")) {
+      const auto& meta_json = json["meta"];
+      out.meta.env = meta_json.value("env", "dev");
+    }
+
     out.nodes.clear();
     for (const auto& node_json : json["nodes"]) {
       PlanNode node;

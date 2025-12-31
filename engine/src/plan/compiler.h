@@ -55,6 +55,7 @@ class PlanCompiler {
   bool ValidateNodeIds(const Plan& plan, std::string* error_out);
   bool TopologicalSort(const Plan& plan, std::vector<std::string>& out, std::string* error_out);
   bool ValidateOps(const Plan& plan, std::string* error_out);
+  bool ValidatePlanEnv(const Plan& plan, std::string* error_out);
   bool ValidateComplexity(const Plan& plan, ComplexityMetrics& metrics, std::string* error_out);
 };
 
