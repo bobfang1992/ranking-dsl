@@ -231,6 +231,33 @@ p = p.core.score(blendExpr, {
 return p.build();
 ```
 
+## Plan Environments and Production Safety
+
+Plans must declare their target environment using `plan.meta.env`:
+
+```javascript
+// Set environment in plan.json metadata
+{
+  "name": "my_plan",
+  "meta": {
+    "env": "prod"  // or "dev" or "test"
+  },
+  "nodes": [...]
+}
+```
+
+**Environment Rules:**
+
+| Environment | Experimental Nodes | Typical Use |
+|-------------|-------------------|-------------|
+| `prod` | ❌ Rejected | Production serving |
+| `dev` | ✅ Allowed | Development and experimentation |
+| `test` | ✅ Allowed | Integration tests |
+
+**Security:** The engine strictly validates that `env` is exactly `"prod"`, `"dev"`, or `"test"` (case-sensitive). Invalid values like `"Prod"`, `"PROD"`, `"production"`, or `"staging"` are rejected to prevent accidental bypass of experimental node restrictions.
+
+**Default:** If `meta.env` is not specified, it defaults to `"dev"`.
+
 ## Expressions
 
 Expressions can be built using the `dsl.F` builder:
@@ -451,7 +478,8 @@ node tools/cli/dist/index.js nodes codegen
 **Stability enforcement:**
 - `experimental.*` nodes can only be used in `dev`/`test` plan environments
 - `stable` nodes (any namespace except `experimental.*`) can be used in all environments
-- Graduation workflow: Update `namespace_path` in source, re-export, re-codegen
+- Production plans (`meta.env: "prod"`) will fail compilation if they reference any experimental nodes
+- Graduation workflow: Update `namespace_path` and `stability` in source, re-export, re-codegen
 
 ## Development
 

@@ -35,18 +35,31 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
    cat keys/registry.yaml
    ```
 
-2. **Create a new plan file:**
+2. **Determine the plan environment:**
+   - Use `prod` for production serving (only stable nodes allowed)
+   - Use `dev` for development and experimentation (experimental nodes allowed)
+   - Use `test` for integration tests (experimental nodes allowed)
+
+3. **Create a new plan file:**
    ```bash
    # Create a plan file in the plans/ directory
    touch plans/my_feature.plan.js
    ```
 
-3. **Write the plan using the DSL:**
+4. **Write the plan using the DSL:**
    ```javascript
    // plans/my_feature.plan.js
 
    // Keys, dsl, and config are injected as frozen globals by the plan compiler
    // No imports/requires needed (and they're disallowed by the static gate)
+
+   // IMPORTANT: Set plan environment
+   // Use "prod" for production (only stable nodes allowed)
+   // Use "dev" for development (experimental nodes allowed)
+   // Use "test" for integration tests (experimental nodes allowed)
+   const planMeta = {
+     env: "dev"  // Change to "prod" when ready for production
+   };
 
    // Configuration (can be parameterized)
    const config = {
@@ -81,11 +94,13 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
      output_key_id: Keys.SCORE_FINAL
    });
 
-   // Return the built plan
-   return p.build();
+   // Build and set metadata
+   const plan = p.build();
+   plan.meta = planMeta;
+   return plan;
    ```
 
-4. **Validate the plan:**
+5. **Validate the plan:**
    ```bash
    # Once Phase 2 is complete, compile the plan
    node tools/cli/dist/index.js plan \
@@ -96,14 +111,28 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
    node tools/cli/dist/index.js validate plans/my_feature.plan.json
    ```
 
-5. **Test the plan:**
+6. **Test the plan:**
    ```bash
    # Run the plan through the engine
    ./build-rel/engine/rankdsl_engine plans/my_feature.plan.json \
      --dump-top 10
    ```
 
-6. **Submit for review:**
+7. **Before production deployment:**
+   ```javascript
+   // Update plan.js to set env to "prod"
+   const planMeta = {
+     env: "prod"
+   };
+   ```
+
+   **Important:** Production plans (`env: "prod"`) cannot use experimental nodes. The engine will reject any plan that:
+   - Has `meta.env: "prod"` AND
+   - References any node with `stability: experimental` (e.g., nodes under `experimental.*` namespaces)
+
+   This prevents accidental deployment of untested experimental features to production.
+
+8. **Submit for review:**
    ```bash
    git checkout -b feature/my-feature-plan
    git add plans/my_feature.plan.js
@@ -129,6 +158,11 @@ Ranking engineers are responsible for building and maintaining ranking pipelines
    // Update blending ratio from 0.7 to 0.8
    const config = {
      blendingAlpha: 0.8  // was 0.7
+   };
+
+   // If testing experimental features, ensure env is "dev" or "test"
+   const planMeta = {
+     env: "dev"  // or "test" for integration tests
    };
    ```
 

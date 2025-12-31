@@ -839,6 +839,49 @@ ranking-dsl/
 
 ---
 
+### Phase 3.9: Plan Environment Enforcement (v0.2.8+) ✅ COMPLETED
+
+**Goal:** Implement plan.meta.env validation and production safety enforcement to prevent experimental nodes in production plans.
+
+**3.9.1 Plan Metadata Structure (engine/src/plan/plan.h)**
+- [x] `PlanMeta` struct with `env` field (default: "dev")
+- [x] `Plan` struct includes `meta` field
+- [x] Environment values: "prod", "dev", "test" (exact string match, case-sensitive)
+
+**3.9.2 Parse-time Validation (engine/src/plan/plan.cpp)**
+- [x] `ParsePlan()` reads `meta.env` from JSON (default: "dev")
+- [x] Strict validation: reject any value not exactly "prod", "dev", or "test"
+- [x] Security fix: prevents bypass via typos ("Prod", "PROD", "production", "staging")
+- [x] Error messages include invalid value and list of allowed values
+
+**3.9.3 Compile-time Enforcement (engine/src/plan/compiler.cpp)**
+- [x] `ValidatePlanEnv()` method in PlanCompiler
+- [x] Enforcement: `env == "prod"` rejects nodes with `stability == experimental`
+- [x] Integrated into compilation pipeline (between ValidateOps and ValidateComplexity)
+- [x] Error messages include node ID, op, namespace_path, and stability
+
+**3.9.4 Comprehensive Tests (engine/tests/plan_env_test.cpp)**
+- [x] Test: dev env allows experimental nodes
+- [x] Test: test env allows experimental nodes
+- [x] Test: prod env allows stable nodes
+- [x] Test: prod env rejects experimental nodes
+- [x] Test: default env is "dev" when not specified
+- [x] Test: meta.env parsing for all three valid values
+- [x] Test: rejection of invalid values ("Prod", "PROD", "production", "staging")
+
+**3.9.5 Documentation Updates**
+- [x] docs/spec.md - Section 9.2: strict validation requirement
+- [x] docs/spec.md - Section 9.3: enforcement rules
+- [x] README.md - Plan Environments and Production Safety section
+- [x] docs/engine.md - Plan Compilation and Validation section
+- [x] docs/workflows.md - Plan environment examples and best practices
+
+**Tests (49 C++ test cases, 533 assertions, all passing)**
+- 6 new test cases in plan_env_test.cpp with 27 assertions
+- All existing tests pass with plan.meta.env enforcement
+
+---
+
 ### Phase 4: CLI & Integration
 
 **4.1 CLI**
