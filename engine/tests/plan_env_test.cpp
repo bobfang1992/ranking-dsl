@@ -33,12 +33,7 @@ TEST_CASE("PlanEnv: dev allows experimental nodes", "[plan_env]") {
 
   // Compile should succeed even if we had experimental nodes
   KeyRegistry key_registry;
-  key_registry.LoadFromJson(R"({
-    "keys": [
-      {"id": 1001, "name": "cand.candidate_id", "type": "i64"},
-      {"id": 3001, "name": "score.base", "type": "f32"}
-    ]
-  })");
+  key_registry.LoadFromCompiled();
 
   PlanCompiler compiler(key_registry);
   CompiledPlan compiled;
@@ -65,12 +60,7 @@ TEST_CASE("PlanEnv: test allows experimental nodes", "[plan_env]") {
   REQUIRE(plan.meta.env == "test");
 
   KeyRegistry key_registry;
-  key_registry.LoadFromJson(R"({
-    "keys": [
-      {"id": 1001, "name": "cand.candidate_id", "type": "i64"},
-      {"id": 3001, "name": "score.base", "type": "f32"}
-    ]
-  })");
+  key_registry.LoadFromCompiled();
 
   PlanCompiler compiler(key_registry);
   CompiledPlan compiled;
@@ -97,12 +87,7 @@ TEST_CASE("PlanEnv: prod allows stable nodes", "[plan_env]") {
   REQUIRE(plan.meta.env == "prod");
 
   KeyRegistry key_registry;
-  key_registry.LoadFromJson(R"({
-    "keys": [
-      {"id": 1001, "name": "cand.candidate_id", "type": "i64"},
-      {"id": 3001, "name": "score.base", "type": "f32"}
-    ]
-  })");
+  key_registry.LoadFromCompiled();
 
   PlanCompiler compiler(key_registry);
   CompiledPlan compiled;
